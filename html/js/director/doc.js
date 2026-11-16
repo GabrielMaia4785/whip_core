@@ -9,9 +9,11 @@
 // and an empty props map as [] — normalise() makes lists lists and maps maps before anything reads
 // them. Keys this editor does not know are KEPT (a newer server's field must survive an older page).
 //
-// UNDO IS SNAPSHOTS: the document as JSON after every change (commit). Cheap at this size (a
-// hundred cards is tens of KB) and it cannot drift from the document, which a list of inverse
-// operations can.
+// CHANGES ARE PATHS (diffDoc, applyOps): what one change did, as each place in the document it touched and what is
+// there now. The room sends them to the others with the scenario open (room.js), and UNDO keeps them: each step is
+// what it changed and what was there before, so an undo takes back your own change and nobody else's. A step is
+// worked out from the document itself (the one before against the one after), never written by hand, so it cannot
+// drift from what the editor did.
 // ========================================
 
 import { renameRef, cardUses, cardUsesAll, eachRef } from './refs.js';
@@ -197,8 +199,8 @@ export function eachVariant(canon, fn, taskTypes) {
 export function newVariant(canon, fromId, taskTypes) {
     const ids = variantList(canon);
     if (ids.length >= MAX_VARIANTS) return null;
-    const top = Math.max(1, ...ids.map((v) => Number(v.id.slice(1)) || 1));
-    const id = 'v' + (top + 1);
+    // (freeId: two builders making a variant at once never make the same one.)
+    const id = freeId(new Set(ids.map((v) => v.id)), 'v');
     const from = unpackDoc(canon, fromId, taskTypes);
     const shared = sharedIds(canon, taskTypes);
     const copy = (x) => JSON.parse(JSON.stringify(x));
@@ -252,11 +254,22 @@ export function slug(text, fallback) {
     return s || fallback || 'thing';
 }
 
-/** The first `base1`, `base2`... not in `used`. */
-export function freeId(used, base) {
+// IN A ROOM (room.js), each builder's new ids are their own: the numbers one in their colour's place of eight (colour 2
+// makes card2, card10, card18...), so two builders adding a card at the same moment never make the same id.
+let idSlot = 0;
+const ID_SLOTS = 8;
+
+/** This page's place among the room's builders (1-8, its colour), or 0: alone, any number. */
+export function setIdSlot(n) { idSlot = Number.isInteger(n) && n >= 1 && n <= ID_SLOTS ? n : 0; }
+
+/** The first `base1`, `base2`... not in `used` (in a room, the first of this page's own numbers: setIdSlot). `plain`:
+ *  the first of all, wherever made (what every page adds the same way as it opens a scenario). */
+export function freeId(used, base, plain) {
     base = slug(base, 'n');
-    let i = 1;
-    while (used.has(base + i)) i++;
+    const own = idSlot && !plain;
+    const step = own ? ID_SLOTS : 1;
+    let i = own ? idSlot : 1;
+    while (used.has(base + i)) i += step;
     return base + i;
 }
 
@@ -450,72 +463,313 @@ export function problemCards(p) {
     return ids;
 }
 
+// ---- changes as paths ----
+//
+// A CHANGE is a list of OPS, each one place in the document and what is there now:
+//   { p: [...path], v: value }        set: a field, a card, a thing, a list that is not keyed (set whole)
+//   { p: [...path], d: 1 }            gone
+//   { p: [...path, '@'], v: [keys] }  a keyed list's order
+// A path's steps are an object's keys, or a member of a KEYED LIST: '#' and its key. A list is keyed when every member
+// is an object with an id (or a step's or point's k) and no two share one: cards, wires, boxes, things, variables,
+// steps, points, variants, takes. A member's key is 'i' + its id, else 'k' + its k ('#iguard1', '#kab3x9'). Any
+// other list is a value, set whole. A member set where none has that key is added at the end; its place among the
+// rest is the order op's.
+// The values are plain data (JSON), and are never shared with the document they came from or go into.
+
+const KEYED_LIST = '#';
+const ORDER = '@';
+
+const copyOf = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
+/** A member's key in a keyed list, or null. */
+function memberKey(x) {
+    if (!isObj(x)) return null;
+    if (typeof x.id === 'string' || (typeof x.id === 'number' && isFinite(x.id))) return 'i' + x.id;
+    if (typeof x.k === 'string' || (typeof x.k === 'number' && isFinite(x.k))) return 'k' + x.k;
+    return null;
+}
+
+/** The list's members by key, or null when it is not keyed (a member with none, or two with one). */
+function keyedMap(list) {
+    const m = new Map();
+    for (const x of list) {
+        const k = memberKey(x);
+        if (k === null || m.has(k)) return null;
+        m.set(k, x);
+    }
+    return m;
+}
+
+/** Are two plain values the same (an object's keys in any order)? */
+export function sameValue(a, b) {
+    if (a === b) return true;
+    if (Array.isArray(a)) {
+        if (!Array.isArray(b) || a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (!sameValue(a[i], b[i])) return false;
+        return true;
+    }
+    if (isObj(a)) {
+        if (!isObj(b)) return false;
+        const ka = Object.keys(a).filter((k) => a[k] !== undefined), kb = Object.keys(b).filter((k) => b[k] !== undefined);
+        if (ka.length !== kb.length) return false;
+        for (const k of ka) if (!(k in b) || !sameValue(a[k], b[k])) return false;
+        return true;
+    }
+    return false;
+}
+
+/** An object's keys a path can name (none that a path step could be taken for). */
+const pathSafe = (o) => Object.keys(o).every((k) => k !== ORDER && k[0] !== KEYED_LIST);
+
+function walk(a, b, p, ops) {
+    if (a === b) return;
+    if (isObj(a) && isObj(b) && pathSafe(a) && pathSafe(b)) {
+        for (const k of Object.keys(a)) {
+            if (a[k] !== undefined && (!(k in b) || b[k] === undefined)) ops.push({ p: p.concat(k), d: 1 });
+        }
+        for (const k of Object.keys(b)) {
+            if (b[k] === undefined) continue;
+            if (!(k in a) || a[k] === undefined) ops.push({ p: p.concat(k), v: copyOf(b[k]) });
+            else walk(a[k], b[k], p.concat(k), ops);
+        }
+        return;
+    }
+    if (Array.isArray(a) && Array.isArray(b) && (a.length || b.length)) {
+        const am = keyedMap(a), bm = keyedMap(b);
+        if (am && bm) {
+            for (const k of am.keys()) if (!bm.has(k)) ops.push({ p: p.concat(KEYED_LIST + k), d: 1 });
+            for (const [k, y] of bm) {
+                if (!am.has(k)) ops.push({ p: p.concat(KEYED_LIST + k), v: copyOf(y) });
+                else walk(am.get(k), y, p.concat(KEYED_LIST + k), ops);
+            }
+            // The order the ops above leave (the gone ones out, the new ones at the end), against the one wanted.
+            const left = [...am.keys()].filter((k) => bm.has(k)).concat([...bm.keys()].filter((k) => !am.has(k)));
+            const want = [...bm.keys()];
+            if (left.some((k, i) => k !== want[i])) ops.push({ p: p.concat(ORDER), v: want });
+            return;
+        }
+    }
+    if (!sameValue(a, b)) ops.push({ p, v: copyOf(b) });
+}
+
+/** What changed from `a` to `b` (both plain documents), as ops. None: the same. */
+export function diffDoc(a, b) {
+    const ops = [];
+    walk(a, b, [], ops);
+    return ops;
+}
+
+/** One step of a path: an object's key, or a keyed list's member. */
+function stepIn(cur, seg) {
+    if (seg[0] === KEYED_LIST) return Array.isArray(cur) ? cur.find((x) => memberKey(x) === seg.slice(1)) : undefined;
+    return isObj(cur) ? cur[seg] : undefined;
+}
+
+/** One op on `root`, in place. Answers the root (a new one for an op on the whole), and whether it applied: a path
+ *  through a member that is not there (taken away meanwhile) does not. A missing object on the way is made (what
+ *  normalise() makes on one page and not on another). */
+function applyOne(root, op) {
+    const p = op.p;
+    if (!Array.isArray(p)) return [root, false];
+    if (!p.length) return op.d ? [root, false] : [copyOf(op.v), true];
+    let parent = null, seg = null, cur = root;
+    for (let i = 0; i < p.length - 1; i++) {
+        let next = stepIn(cur, p[i]);
+        if (next === undefined && p[i][0] !== KEYED_LIST && isObj(cur) && !op.d) {
+            next = p[i + 1][0] === KEYED_LIST || p[i + 1] === ORDER ? [] : {};
+            cur[p[i]] = next;
+        }
+        if (next === undefined || next === null || typeof next !== 'object') return [root, false];
+        // (An empty list where an object is wanted: what Lua sends for an empty map.)
+        if (Array.isArray(next) && !next.length && p[i + 1][0] !== KEYED_LIST && p[i + 1] !== ORDER && isObj(cur) && p[i][0] !== KEYED_LIST) {
+            next = {};
+            cur[p[i]] = next;
+        }
+        parent = cur;
+        seg = p[i];
+        cur = next;
+    }
+    const last = p[p.length - 1];
+    if (last === ORDER) {
+        if (!Array.isArray(cur) || !Array.isArray(op.v)) return [root, false];
+        const at = new Map(op.v.map((k, i) => [k, i]));
+        const listed = cur.filter((x) => at.has(memberKey(x))).sort((x, y) => at.get(memberKey(x)) - at.get(memberKey(y)));
+        const rest = cur.filter((x) => !at.has(memberKey(x)));
+        cur.length = 0;
+        cur.push(...listed, ...rest);
+        return [root, true];
+    }
+    if (last[0] === KEYED_LIST) {
+        if (!Array.isArray(cur)) {
+            // (An empty map where a list is wanted: the other way round.)
+            if (!(isObj(cur) && !Object.keys(cur).length && parent && seg !== null && seg[0] !== KEYED_LIST)) return [root, false];
+            cur = [];
+            parent[seg] = cur;
+        }
+        const k = last.slice(1);
+        const i = cur.findIndex((x) => memberKey(x) === k);
+        if (op.d) { if (i >= 0) cur.splice(i, 1); return [root, true]; }
+        if (i >= 0) cur[i] = copyOf(op.v); else cur.push(copyOf(op.v));
+        return [root, true];
+    }
+    if (Array.isArray(cur) && !cur.length && parent && seg !== null && seg[0] !== KEYED_LIST) {
+        cur = {};
+        parent[seg] = cur;
+    }
+    if (!isObj(cur)) return [root, false];
+    if (op.d) delete cur[last]; else cur[last] = copyOf(op.v);
+    return [root, true];
+}
+
+/** The ops on `root`, in place and in order. Answers the root (a new one when an op set the whole) and how many did
+ *  not apply. */
+export function applyOps(root, ops) {
+    let missed = 0;
+    for (const op of ops) {
+        const [r, ok] = applyOne(root, op);
+        root = r;
+        if (!ok) missed++;
+    }
+    return { doc: root, missed };
+}
+
+/** Is path `a` the same as `b`, or a place inside it? */
+export function pathWithin(a, b) {
+    if (a.length < b.length) return false;
+    for (let i = 0; i < b.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+}
+
+/** A document's text with every object's keys in order: two documents that are the same read the same, however their
+ *  keys came to be in them (what "not saved" compares). */
+export function stableText(v) {
+    if (Array.isArray(v)) return '[' + v.map((x) => (x === undefined ? 'null' : stableText(x))).join(',') + ']';
+    if (isObj(v)) {
+        return '{' + Object.keys(v).filter((k) => v[k] !== undefined).sort()
+            .map((k) => JSON.stringify(k) + ':' + stableText(v[k])).join(',') + '}';
+    }
+    return JSON.stringify(v === undefined ? null : v);
+}
+
+const opsBytes = (ops) => ops.reduce((n, o) => n + (o.v === undefined ? 16 : JSON.stringify(o.v).length + 16), 0);
+
 // ---- undo ----
+//
+// YOUR OWN STEPS: each is what it changed (do) and what was there before (undo), worked out at commit from the document
+// as it was last committed. What others change (remote) goes into that document too, so it is never taken for a step of
+// yours, and an undo takes back only what you did, leaving theirs. Alone, it is the same as going back to the document
+// as it was.
 
 export class History {
     /** `pack`: the document as it is kept, from what the editor holds (a variant's view: packDoc); none, as it is.
      *  Each step remembers the variant it was made in (undo goes back to it: lastVariant). */
     constructor(doc, pack) {
         this.pack = typeof pack === 'function' ? pack : (d) => d;
-        this.stack = [JSON.stringify(this.pack(doc))];
-        this.made = [(doc && doc.variantOpen) || 'v1'];
-        this.at = 0;
-        this.saved = this.stack[0];
+        this.last = copyOf(this.pack(doc));   // the document as of the last step, others' changes in it
+        this.steps = [];                      // { do, undo, made, tag, bytes }
+        this.at = 0;                          // steps[0 .. at-1] are done
+        this.saved = stableText(this.last);
         this.lastVariant = null;
+        this.tag = null;                      // the next step's tag (tagSteps)
     }
 
     /** Record the document as it is now. Answers false when nothing changed. */
     commit(doc) {
-        const s = JSON.stringify(this.pack(doc));
-        if (s === this.stack[this.at]) return false;
-        this.stack.length = this.at + 1;
-        this.made.length = this.at + 1;
-        this.stack.push(s);
-        this.made.push((doc && doc.variantOpen) || 'v1');
+        const now = copyOf(this.pack(doc));
+        const fwd = diffDoc(this.last, now);
+        const tag = this.tag;
+        this.tag = null;
+        if (!fwd.length) return false;
+        const back = diffDoc(now, this.last);
+        this.steps.length = this.at;
+        this.steps.push({ do: fwd, undo: back, made: (doc && doc.variantOpen) || 'v1', tag, bytes: opsBytes(fwd) + opsBytes(back) });
         // At most UNDO_LIMIT steps, and (a scenario of eight variants is big) about 24 MB of them.
-        let bytes = this.stack.reduce((n, x) => n + x.length, 0);
-        while (this.stack.length > 1 && (this.stack.length > UNDO_LIMIT || bytes > UNDO_BYTES)) {
-            bytes -= this.stack[0].length;
-            this.stack.shift();
-            this.made.shift();
+        let bytes = this.steps.reduce((n, s) => n + s.bytes, 0);
+        while (this.steps.length > 1 && (this.steps.length > UNDO_LIMIT || bytes > UNDO_BYTES)) {
+            bytes -= this.steps[0].bytes;
+            this.steps.shift();
         }
-        this.at = this.stack.length - 1;
+        this.at = this.steps.length;
+        this.last = now;
         return true;
     }
 
-    /** The document (as kept) one step back, or null. A change not yet committed (half-typed) counts as a step. The
-     *  variant the undone step was made in: lastVariant. */
+    /** The document (as kept) with your last step taken back, or null. A change not yet committed (half-typed) counts as
+     *  a step. The variant the undone step was made in: lastVariant. */
     undo(doc) {
         this.commit(doc);
         if (this.at === 0) return null;
-        this.lastVariant = this.made[this.at];
+        const s = this.steps[this.at - 1];
         this.at -= 1;
-        return JSON.parse(this.stack[this.at]);
+        this.lastVariant = s.made;
+        return this.applied(doc, s.undo);
     }
 
-    redo() {
-        if (this.at >= this.stack.length - 1) return null;
+    /** The document (as kept) with your next undone step done again, or null. Without `doc` (the Systems Creator's
+     *  call), the document as last recorded: a redo follows an undo, with nothing changed between. */
+    redo(doc) {
+        if (doc !== undefined) this.commit(doc);
+        if (this.at >= this.steps.length) return null;
+        const s = this.steps[this.at];
         this.at += 1;
-        this.lastVariant = this.made[this.at];
-        return JSON.parse(this.stack[this.at]);
+        this.lastVariant = s.made;
+        return this.applied(doc, s.do);
     }
 
-    /** A change made under the builder, not by them (a lore character's new ped): `change(doc)` is folded into the step
-     *  it is on, and into the saved copy when that step is it. Nothing to undo, and nothing new to save. */
+    /** `ops` on a copy of the document as kept now (none: as last recorded): the document it makes, recorded as the last. */
+    applied(doc, ops) {
+        const out = applyOps(copyOf(doc === undefined ? this.last : this.pack(doc)), ops).doc;
+        this.last = copyOf(out);
+        return out;
+    }
+
+    /** Every step tagged `tag` (newest first) taken back, and gone from undo and redo: the document (as kept), or null
+     *  when there were none. The world builder's Exit: what it placed, moved and removed since its last Save. */
+    undoTagged(doc, tag) {
+        this.commit(doc);
+        const mine = this.steps.filter((s) => s.tag === tag);
+        if (!mine.length) return null;
+        let out = copyOf(this.pack(doc));
+        for (let i = mine.length - 1; i >= 0; i--) out = applyOps(out, mine[i].undo).doc;
+        const keep = this.steps.slice(0, this.at).filter((s) => s.tag !== tag);
+        this.steps = keep;
+        this.at = keep.length;
+        this.last = copyOf(out);
+        return out;
+    }
+
+    /** The next commit's step is tagged (undoTagged). */
+    tagNext(tag) { this.tag = tag; }
+    /** No step is tagged any more (what they did was saved). */
+    untag(tag) { for (const s of this.steps) if (s.tag === tag) s.tag = null; }
+
+    /** Someone else's change, already on the document: in the document steps are worked out from, never a step. */
+    remote(ops) { this.last = applyOps(this.last, ops).doc; }
+
+    /** The document as kept is now `canon` from elsewhere (the room's, as it is): the steps are let go of. */
+    reset(canon) {
+        this.last = copyOf(canon);
+        this.steps = [];
+        this.at = 0;
+    }
+
+    /** A change made under the builder, not by them (a lore character's new ped): `change(doc)` goes into the document
+     *  steps are worked out from, and into the saved copy when it was saved. Nothing to undo, and nothing new to save. */
     adopt(doc, change) {
         this.commit(doc);   // a change of theirs not yet committed stays a step of its own, and unsaved
-        const was = this.stack[this.at];
+        const wasSaved = this.saved === stableText(this.last);
         change(doc);
-        const s = JSON.stringify(this.pack(doc));
-        this.stack[this.at] = s;
-        if (this.saved === was) this.saved = s;
+        this.last = copyOf(this.pack(doc));
+        if (wasSaved) this.saved = stableText(this.last);
     }
 
     canUndo() { return this.at > 0; }
-    canRedo() { return this.at < this.stack.length - 1; }
-    markSaved(doc) { this.saved = JSON.stringify(this.pack(doc)); }
-    /** What a save sent, as it was sent (the packed document's text, taken before the reply): what is typed while the
-     *  save is on its way stays unsaved. */
+    canRedo() { return this.at < this.steps.length; }
+    markSaved(doc) { this.saved = stableText(this.pack(doc)); }
+    /** What a save sent, as it was sent (stableText of the packed document, taken before the reply): what is typed while
+     *  the save is on its way stays unsaved. */
     markSavedText(text) { this.saved = text; }
-    isDirty(doc) { return JSON.stringify(this.pack(doc)) !== this.saved; }
+    /** Not saved, whatever it is now (the room's, holding changes nobody has saved). */
+    markUnsaved() { this.saved = null; }
+    isDirty(doc) { return this.saved === null || stableText(this.pack(doc)) !== this.saved; }
 }

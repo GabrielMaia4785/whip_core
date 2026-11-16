@@ -32,6 +32,8 @@
 --   name, detail   its words; glyph (a prompt's icon), pic (an item's picture)
 --   selected       the selection's look
 --   lit            green (a card in the blueprint window names it)
+--   tint           { r, g, b } its disc wears instead of white (another builder's camera: client/director_room.lua)
+--   first          named before the rest, however far (within FAR)
 --   nearText       named within this many metres (NEAR when nil)
 
 WorldMarks = {}
@@ -129,6 +131,7 @@ end
 -- ============================================
 
 local function nearerFirst(a, b)
+    if (a.first == true) ~= (b.first == true) then return a.first == true end
     if a.selected ~= b.selected then return a.selected == true end
     return a._d < b._d
 end
@@ -207,9 +210,11 @@ local function drawMark(m, now, perM, rx, ry, rz, ux, uy, uz)
 
     local cx, cy, cz = m.x, m.y, m.z
     if m.ground then cz = cz + STEM_M end
-    -- Lit by a card in the blueprint window: the white goes green (the tint multiplies the texture).
+    -- Lit by a card in the blueprint window: the white goes green (the tint multiplies the texture); a mark's own tint
+    -- the same way.
     local tr, tg, tb = 255, 255, 255
-    if m.lit then tr, tg, tb = LIT_R, LIT_G, LIT_B end
+    if m.lit then tr, tg, tb = LIT_R, LIT_G, LIT_B
+    elseif m.tint then tr, tg, tb = m.tint[1], m.tint[2], m.tint[3] end
 
     if m.ground and near then
         -- The ring, flat on the ground at the exact spot (a hair above it, so the floor does not cut it).
@@ -279,7 +284,7 @@ function WorldMarks.finish()
         m._d = sqrt(dx * dx + dy * dy + dz * dz)
         m._near = m._d <= (m.nearText or NEAR)
         m._show = m._d <= FAR
-        m._wants = m._show and (m._near or m.selected)
+        m._wants = m._show and (m._near or m.selected or m.first == true)
     end
     assignSlots(now)
 

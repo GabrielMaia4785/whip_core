@@ -10558,12 +10558,25 @@ whip_director_scenario 'scenarios/drug_run.json'</code></pre>
 <h3>Building a scenario<span class="owner-tag">Server owners</span></h3>
 <p><strong>New scenario</strong> or <strong>Open Editor</strong> takes you into the <strong>world builder</strong>: place its people and things with <strong>Place</strong>, set each one up with <strong>Configure</strong>, and open <strong>Blueprint</strong> for its cards in a window over the world. <strong>Fullscreen</strong> opens the full editor (Cards, World, Variables and Settings tabs; Save, Test and Check); its <strong>‹</strong> or <kbd>Esc</kbd> goes back into the world.</p>
 <ul>
-<li><strong>Saving.</strong> <strong>Save</strong> writes the world into the scenario and saves it. The world builder also saves every five minutes, unless <em>Auto-save in the world builder</em> is off (World tab). <strong>Exit</strong> leaves the Director and throws away what you placed or moved since the last Save (it asks first). Other changes not saved stay with the scenario until you open it again.</li>
+<li><strong>Saving.</strong> <strong>Save</strong> writes the world into the scenario and saves it. The world builder also saves every five minutes, unless <em>Auto-save in the world builder</em> is off (World tab). <strong>Exit</strong> leaves the Director and throws away what you placed, moved or removed since the last Save (it asks first; what other builders did stays). Other changes not saved stay with the scenario until you open it again.</li>
 <li><strong>Keys.</strong> In the world, <kbd>R</kbd> switches between moving and turning, <kbd>G</kbd> steps snapping, <kbd>Ctrl</kbd>+click selects several. On the grid, right-click adds a card, a drag from a pin draws a wire, <kbd>C</kbd> makes a comment box, and the usual <kbd>Ctrl</kbd> keys copy, paste, undo and save.</li>
 <li><strong>Wires.</strong> An outcome can have several: every card they lead to starts at the same moment, the first-drawn first.</li>
 <li><strong>Only once.</strong> A switch on every card that does something and goes on: it works the first time a run reaches it, then the run skips it through its first outcome. To stop the run the second time, use <strong>First Time Only</strong>.</li>
 <li><strong>Several things on one card.</strong> Most cards that name placed things take several, or a <strong>group</strong>: every NPC or prop whose page gives that Group name, as it is when the scenario plays. Talking cards, goals and cards about one car name one.</li>
 <li><strong>Watching.</strong> A scenario's live runs light each card they enter on the grid; after a test, the test plays back the same way. During a test, the test map's <strong>Free camera</strong> (<kbd>H</kbd> for the mouse first) flies round it, and <kbd>G</kbd> hides the test map.</li>
+</ul>
+
+<h3 id="director-together">Building together<span class="owner-tag">Server owners</span></h3>
+<p>Several builders can work on one scenario at the same time. Everyone who opens it is in the same scenario: what one changes, the others see as it happens, and <strong>Save</strong> saves everyone's changes as the next revision, whoever presses it.</p>
+<ul>
+<li><strong>Who's in.</strong> Each builder gets a colour. The others show as rounds at the top right of the editor and at the top of the world builder; hover one for their name and where they are.</li>
+<li><strong>On the blueprint.</strong> Each other builder's pointer, the cards they have picked (ringed, with their name over them) and the field they are typing in, all in their colour. A card someone is dragging is theirs until they let go.</li>
+<li><strong>In the world.</strong> Each other builder's camera with their name over it, the spot their pointer is on, and a tag over the thing they are working on. What they place, move and remove shows in your world builder as they do it. Something they are moving is theirs until they let go.</li>
+<li><strong>Undo</strong> takes back your own changes, never someone else's.</li>
+<li><strong>The same field changed by two builders at once</strong> keeps the later change, on every screen.</li>
+<li><strong>Leaving.</strong> Changes nobody has saved stay with the scenario for the others. When the last builder leaves without saving, they are kept for 30 minutes, so opening it again brings them back.</li>
+<li><strong>Tests are your own.</strong> A test plays the scenario as your screen has it, for you alone. Use <strong>Isolate world</strong> so two builders' tests don't meet.</li>
+<li><strong>Cards that need a permission</strong> can only be added or changed by a builder who has it, whoever saves.</li>
 </ul>
 
 <h3>Cards builders use<span class="owner-tag">Server owners</span></h3>

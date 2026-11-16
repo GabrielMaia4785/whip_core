@@ -612,6 +612,8 @@ function DirectorStore.save(key, baseRev, doc, by, note)
     if type(doc.name) == 'string' then r.name = cut(doc.name, 80) end
     r.description = desc
     summaries[key] = DirectorStore.summarize(doc)
+    -- (Its room, if it has one open: room.lua.)
+    DirectorRoom.draftSaved(key, rev, doc)
     return rev
 end
 

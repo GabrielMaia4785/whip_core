@@ -1220,6 +1220,8 @@ end
 local function moveSelected(data)
     local it = selected and items[selected]
     if not it or tonumber(data.i) ~= selected then return end
+    -- (Another builder in the Director's room is moving it: theirs until they let go.)
+    if FurnishBuilder.lockedOut(it) then return end
     -- Several: the markers are their middle's, so a place is where the middle goes and a heading is the group's ring.
     local set = pickedNow()
     if set then
@@ -1302,6 +1304,7 @@ end
 local function dragSelectedTo(data)
     local it = selected and items[selected]
     if not it or tonumber(data.i) ~= selected then return end
+    if FurnishBuilder.lockedOut(it) then return end
     local set = pickedNow()
     local g = set and groupOf(set) or nil
     if (g and g.fixed) or (not g and it.door) then return end
@@ -2428,6 +2431,55 @@ function Furnisher.prunePoints(keep)
     end
     if gone then
         dirty, edits = true, edits + 1
+        pushItems()
+        pushState()
+    end
+end
+
+--- The Director's thing `id` is somewhere else now (another builder in its room moved it, or an undo did): its copy
+--- goes there. Not an edit of this builder's (nothing new to save here). Answers whether it is here.
+---@param id string
+---@param x number
+---@param y number
+---@param z number
+---@param rx number|nil  a prop's tilt (the rest stand upright)
+---@param ry number|nil
+---@param rz number
+function Furnisher.setPose(id, x, y, z, rx, ry, rz)
+    if not (FurnishModeActive and session and session.page) or id == nil then return false end
+    for i = 1, #items do
+        local it = items[i]
+        if type(it.extra) == 'table' and it.extra.id == id then
+            if it.door then return true end   -- (the world's own door: picked, not moved)
+            it.x, it.y, it.z = x, y, z
+            if KINDS[kindOf(it)].tilt then it.rx, it.ry = rx or it.rx or 0.0, ry or it.ry or 0.0 end
+            it.rz = (rz or it.rz or 0.0) % 360.0
+            applyItem(it)
+            if selected == i then pushState() end
+            return true
+        end
+    end
+    return false
+end
+
+--- The Director's things its scenario no longer has (another builder in its room removed them, or an undo did): gone
+--- from the builder at once. `keep`: [id] = true for every thing and point it has now. One not given an id yet (just
+--- put down here) stays.
+---@param keep table
+function Furnisher.pruneThings(keep)
+    if not (FurnishModeActive and session and session.page) or type(keep) ~= 'table' then return end
+    local gone = false
+    for i = #items, 1, -1 do
+        local x = items[i].extra
+        if type(x) == 'table' and type(x.id) == 'string' and not keep[x.id] then
+            local it = items[i]
+            if it.obj and not it.door and not it.world and DoesEntityExist(it.obj) then DeleteEntity(it.obj) end
+            table.remove(items, i)
+            if selected == i then selected, picked = nil, {} elseif selected and selected > i then selected = selected - 1 end
+            gone = true
+        end
+    end
+    if gone then
         pushItems()
         pushState()
     end

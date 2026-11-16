@@ -16,7 +16,7 @@ import { normalise, History, makeNode, duplicateNodes, removeNodes, findNode, fi
     slug, isId, renameWorld, renameVar, usesOfWorld, usesOfWorlds, usesOfVar, addLink, problemCards,
     copyNodes, pasteNodes, makeComment, removeComment, findComment, insertReroute,
     unpackDoc, packDoc, eachVariant, newVariant, removeVariant, renameVariant, moveVariant, variantList, variantLabel,
-    sharedIds, MAX_VARIANTS, listOf } from './doc.js';
+    sharedIds, MAX_VARIANTS, listOf, stableText, applyOps } from './doc.js';
 import { plural, clock } from '../wp/format.js';
 import { Canvas, GEO, REROUTE, couldNot, opensMenu } from './canvas.js';
 import { openSearch, openMenu, closeSearch, isSearchOpen, CATEGORY_TITLE } from './search.js';
@@ -34,6 +34,8 @@ import { watchSelects, openChoices, isDropdownOpen, closeDropdown } from './drop
 import { emoteMenuUp } from '../emotes.js';
 import { primeLorePortraits } from '../lore-faces.js';
 import { testWindowMessage } from './testwin.js';
+import { initRoom, roomMessage, roomSay, roomDraw, drawWho, roomOpen, roomLeave, roomEdited, roomSettle, roomOn, roomOthers,
+         roomKnown, roomClean, roomSaved, roomFlushNow, roomIds } from './room.js';
 
 const e = escapeHtml;
 
@@ -593,6 +595,7 @@ ed.select = function (ids) {
     ed.selectedNote = null;
     ed.picker = null;   // it was for a field of the page the selection showed
     canvas.render();
+    roomSay();   // (the others see what is picked: room.js)
     // On the world builder's grid a card picked is its page, whatever the column had open; let go of, the
     // panel goes back to what it showed before the card (the card list, a thing's page), or it goes. Never
     // to an older page underneath, one the panel had already closed.
@@ -638,6 +641,7 @@ ed.selectLink = function (id) {
     ed.selectedLink = id;
     ed.selectedNote = null;
     canvas.render();
+    roomSay();
     if (ed.tab === 'card') drawColumn();
 };
 
@@ -648,6 +652,7 @@ ed.selectNote = function (id) {
     ed.selectedLink = null;
     ed.selectedNote = id;
     canvas.render();
+    roomSay();
     if (ed.tab === 'card') drawColumn();
 };
 
@@ -663,6 +668,8 @@ ed.changed = function () {
     scheduleQuiet();
     builderSync();
     docTouched();
+    roomEdited();   // (the others with it open have it too: room.js)
+    roomSay();      // (a picked card taken away is no longer picked)
 };
 
 /** In the world builder, its Save says whether there is anything to save, the scenario's own changes (its
@@ -685,6 +692,7 @@ function touched(spec) {
     }
     else builderSync();
     docTouched();
+    roomEdited();   // (as it is typed: the others see it come)
 }
 
 ed.ui = {
@@ -907,7 +915,7 @@ function undo() {
 }
 
 function redo() {
-    const d = ed.history.redo();
+    const d = ed.history.redo(ed.doc);
     if (!d) { status('Nothing to redo'); return; }
     viewOf(d, ed.history.lastVariant);
     ed.changedNoCommit();
@@ -931,7 +939,12 @@ ed.changedNoCommit = function () {
     canvas.render();
     drawColumn();
     scheduleQuiet();
+    builderSync();
+    roomEdited();   // (the others with it open have it too: room.js)
 };
+
+/** A card or a box dragged on the grid, as it moves: the others see it move (room.js), its undo step comes at the drop. */
+ed.live = () => roomEdited();
 
 /** What is picked or open in the editor, by id: another scenario's (or another variant's: ids repeat across them) 'note1',
  *  'd1' or 'guard' is not this one's. */
@@ -987,8 +1000,12 @@ async function openScenario(key, rev) {
     ed.key = key;
     ed.scenario = d.scenario;
     // As it opens, every variant: its lore characters' peds as they are now, and its Scenario Enabled card. (A document
-    // is read the one way on the server, server/director/doc.lua: no old shape reaches the editor.)
-    ed.doc = eachVariant(normalise(d.doc), (doc) => {
+    // is read the one way on the server, server/director/doc.lua: no old shape reaches the editor.) The room's (the
+    // draft, with what others have changed in it) is kept as it came: what this page adds to it goes to the room
+    // too, as nothing to save (room.js).
+    const raw = normalise(d.doc);
+    const asCame = JSON.parse(JSON.stringify(raw));
+    ed.doc = eachVariant(raw, (doc) => {
         loreAsNow(doc);
         startCardAlways(doc);
     }, taskTypes());
@@ -998,6 +1015,14 @@ async function openScenario(key, rev) {
     ed.pack = typeof d.pack === 'string' ? d.pack : null;   // shipped by a pack: read-only here
     ed.editors = Array.isArray(d.editors) ? d.editors : [];
     ed.history = new History(ed.doc, (doc) => packed(doc));
+    // The draft is edited in its room (server/director/room.lua, room.js): changes there nobody has saved yet are not
+    // saved here either. An old revision opened to restore is not the room's.
+    if (d.room && typeof d.room === 'object' && !ed.pack) {
+        if (d.room.dirty) ed.history.markUnsaved();
+        roomOpen(d.room, asCame);
+    } else {
+        roomLeave();
+    }
     resetPicks();
     ed.views = null;
     ed.variantRename = null;
@@ -1022,14 +1047,16 @@ async function openScenario(key, rev) {
         const names = [...new Set(toPlace.map((p) => { const w = findWorld(ed.doc, p.world); return w ? (w.label || w.id) : p.world; }))];
         status(`Before testing, place ${names.join(' and ')}: open each from the World list and press Place in the world`, 'warn');
     } else {
-        status(ed.editors.length ? `${ed.editors.join(', ')} has this open too: the first to save wins` : '',
-            ed.editors.length ? 'warn' : '');
+        status(ed.editors.length ? `${ed.editors.join(', ')} ${ed.editors.length === 1 ? 'has' : 'have'} this open too: you are editing it together` : '',
+            ed.editors.length ? 'ok' : '');
     }
     drawAll();
     canvas.frame();
     // Opened out of sight (straight into the world): the grid has no size to frame in yet, so it is framed again the
     // first time the page shows (showPage).
     framePending = away;
+    // (The room may have come before the scenario did: its others are drawn on it now.)
+    roomDraw();
     return null;
 }
 
@@ -1048,18 +1075,21 @@ async function save(note, opts = {}) {
     ed.busy = true;
     status('Saving…');
     await settleQuiet();
+    // In its room: the room's scenario is saved, everyone's changes in it (this page's own sent first: room.js).
+    if (roomOn()) return saveRoom(note, done);
     // What is sent, as text now: edits made while the save is on its way are not part of it, and stay unsaved (an Undo
     // or another variant shown meanwhile too: told apart from the saved text). The reply is this scenario's: another
     // opened meanwhile keeps its own revision.
     const key = ed.key;
     const sent = packed();
-    const sentText = JSON.stringify(sent);
+    const sentText = stableText(sent);
     const r = await send('directorSave', { key, baseRev: ed.baseRev, doc: sent, note: note || '' });
     ed.busy = false;
     if (ed.key !== key) return done(r.ok, r.ok ? { rev: r.data.rev } : { why: r.why });
     if (r.ok) {
         ed.baseRev = r.data.rev;
         ed.history.markSavedText(sentText);
+        ed.history.untag('builder');   // (the world builder's Exit takes back nothing saved)
         setProblems(r.data.problems);
         const errs = ed.problemList.filter((p) => p.severity === 'error').length;
         status(`Saved as revision ${ed.baseRev}` + (errs ? ` (${plural(errs, 'problem')}: see Check)` : ''), errs ? 'warn' : 'ok');
@@ -1086,11 +1116,99 @@ async function save(note, opts = {}) {
     return false;
 }
 
+/** Save the room's scenario (server/director/room.lua): once this page's last changes are in, whoever made the rest.
+ *  Saved, every page in the room hears it (roomSaved); the reply is this page's own hearing of it. */
+async function saveRoom(note, done) {
+    const key = ed.key;
+    const upTo = await roomSettle();
+    const r = await call('roomSave', { key, upTo, note: note || '' });
+    ed.busy = false;
+    if (ed.key !== key) return done(r.ok, r.ok ? { rev: r.data.rev } : { why: r.why });
+    if (!r.ok) {
+        status(r.why, 'error');
+        return done(false, { why: r.why });
+    }
+    if (r.data.nothing) {
+        status('Nothing to save');
+        return done(true, { nothing: true });
+    }
+    roomSaved({ seq: r.data.seq, rev: r.data.rev, problems: r.data.problems, mine: true });
+    return done(true, { rev: r.data.rev });
+}
+
+/** The room's scenario was saved (by this page, or another in the room: room.js, once what was saved is in here).
+ *  `clean`: nothing of this page's was left out of it, so it is saved here too. */
+function roomWasSaved(e) {
+    ed.baseRev = Number(e.rev) || ed.baseRev;
+    if (e.clean) ed.history.markSaved(ed.doc);
+    ed.history.untag('builder');   // (the world builder's Exit takes back nothing saved)
+    setProblems(e.problems);
+    const errs = ed.problemList.filter((p) => p.severity === 'error').length;
+    const who = e.mine ? '' : ` by ${e.by || 'someone'}`;
+    status(`Saved as revision ${ed.baseRev}${who}` + (errs ? ` (${plural(errs, 'problem')}: see Check)` : ''), errs ? 'warn' : 'ok');
+    canvas.render();
+    if (fieldInHand()) redrawWhenFree(); else drawColumn();
+    docTouched();
+}
+
+/** The room's scenario whole, to start from again (a change of this page's refused, the draft saved elsewhere, back
+ *  after the room moved on). Answers it as it came (room.js starts from that). Undo starts again. */
+function takeRoomDoc(doc, o) {
+    const raw = normalise(doc);
+    const asCame = JSON.parse(JSON.stringify(raw));
+    const open = openVariant();
+    const canon = eachVariant(raw, (x) => { loreAsNow(x); startCardAlways(x); }, taskTypes());
+    ed.doc = unpackDoc(canon, open, taskTypes());
+    if (typeof o.baseRev === 'number' && o.baseRev > 0) ed.baseRev = o.baseRev;
+    ed.history = new History(ed.doc, (x) => packed(x));
+    if (o.dirty) ed.history.markUnsaved();
+    for (const id of [...ed.selected]) if (!findNode(ed.doc, id)) ed.selected.delete(id);
+    if (ed.worldOpen && !findWorld(ed.doc, ed.worldOpen)) ed.worldOpen = null;
+    if (o.problems) setProblems(o.problems, true);
+    canvas.render();
+    if (fieldInHand()) redrawWhenFree(true); else if (shown) drawAll();
+    builderSync();
+    roomDraw();
+    if (o.why) status(o.why, 'warn');
+    return asCame;
+}
+
+/** Back on a scenario this page had open (the screen closed meanwhile): the room's answer to `watch`. Nothing new:
+ *  this page goes on. The room moved on: its scenario taken, unless the room had to start again from the saved draft
+ *  while this page holds changes it never got (sent to it now), or the draft was saved elsewhere meanwhile (asked). */
+async function roomBack(d) {
+    const info = d.room;
+    if (!d.doc) {
+        // (Saved meanwhile by another, with nothing of this page's left out: saved here too.)
+        if (!info.dirty && roomClean()) ed.history.markSaved(ed.doc);
+        if (typeof d.baseRev === 'number' && d.baseRev > 0) ed.baseRev = d.baseRev;
+        roomOpen(info, null);
+        drawHead();
+        return;
+    }
+    const mine = ed.history.isDirty(ed.doc);
+    if (info.fresh && mine && d.baseRev === ed.baseRev) {
+        // (The room started again from the saved draft, which is this page's too: its changes go to the room.)
+        roomOpen(info, JSON.parse(JSON.stringify(normalise(d.doc))), { seed: true });
+        return;
+    }
+    if (info.fresh && mine) {
+        const pick = await ask('Saved while you were away', `${ed.doc.name} was saved from elsewhere (revision ${d.baseRev}) `
+            + 'while it was closed here. Your changes are still here.', [
+            { label: 'Save mine as a copy', value: 'copy', tone: 'primary' },
+            { label: 'Open theirs (lose mine)', value: 'theirs', tone: 'danger' },
+        ]);
+        if (pick === 'copy') { roomLeave(); await saveAsCopy(); return; }
+    }
+    roomOpen(info, takeRoomDoc(d.doc, { dirty: info.dirty, baseRev: d.baseRev, problems: d.problems,
+        why: info.fresh ? 'Saved from elsewhere while it was closed here: this is it now' : 'Changed by the others while it was closed here' }));
+}
+
 async function saveAsCopy() {
     const name = (ed.doc.name || ed.key) + ' (copy)';
     const used = new Set(((ed.hub && ed.hub.scenarios) || []).map((s) => s.key));
     used.add(ed.key);
-    const key = freeId(used, slug(ed.key, 'scenario') + '_copy');
+    const key = freeId(used, slug(ed.key, 'scenario') + '_copy', true);
     const made = await call('create', { key, name, from: 'copy:' + ed.key });
     if (!made.ok) { status(made.why, 'error'); return false; }
     ed.key = key;
@@ -1313,6 +1431,8 @@ function toWorld() {
 async function letGo() {
     commitField();
     if (!ed.doc || ed.demo || !ed.history || !ed.history.isDirty(ed.doc)) return true;
+    // Others still in its room: its unsaved changes are theirs too, and stay there with them (and for this page, back).
+    if (roomOn() && roomOthers() > 0) return true;
     const pick = await ask('Unsaved changes', `${ed.doc.name} has changes that are not saved.`, [
         { label: 'Save', value: 'save', tone: 'primary' },
         { label: 'Throw them away', value: 'drop', tone: 'danger' },
@@ -1320,6 +1440,8 @@ async function letGo() {
     ]);
     if (pick === null) return false;
     if (pick === 'save' && !(await save())) return false;
+    // (Its room kept them: they go from there too.)
+    if (pick === 'drop' && roomOn()) await call('roomRevert', { key: ed.key });
     return true;
 }
 
@@ -1446,18 +1568,21 @@ function drawHead(dirtyKnown) {
     bar.querySelector('[data-act="redo"]').disabled = !ed.history.canRedo();
 }
 
-/** THE DOCK, top right over the grid: Isolate world (puts you in your own routing bucket), lit while
- *  you are in it, and the tutorial's stages. */
+/** THE DOCK, top right over the grid: who else has the scenario open (room.js), Isolate world (puts you in your own
+ *  routing bucket), lit while you are in it, and the tutorial's stages. */
 function drawDock() {
     const dock = root && root.querySelector('.dr-dock');
     if (!dock) return;
     const on = ed.isolated;
-    dock.innerHTML = `<button class="dr-dock-btn${on ? ' on' : ''}" data-act="isolate" title="${on
+    // (Who else has it open, first: room.js fills it.)
+    dock.innerHTML = '<div class="dr-who" hidden></div>'
+        + `<button class="dr-dock-btn${on ? ' on' : ''}" data-act="isolate" title="${on
         ? 'You are in a world of your own: no other players and no traffic, and your tests are made here. Press to go back to the shared world (closing the Director does too).'
         : 'A world of your own while you build: no other players and no traffic, and your tests are made in it. It ends when you close the Director.'}">`
         + `<span class="dr-dock-dot"></span>${on ? 'Own world' : 'Isolate world'}</button>`
         + '<button class="dr-dock-btn" data-act="tutorial" title="The Director tutorial: go through any of its stages again">'
         + '<span class="dr-dock-q">?</span>Tutorial</button>';
+    drawWho();
 }
 
 /** Isolate world on or off. The server says where you are; a refusal (in a car, in a job) is said. */
@@ -1474,7 +1599,8 @@ async function toggleIsolate() {
 function startCardAlways(doc) {
     if ((doc.nodes || []).some((n) => n.type === 'scenario.started')) return;
     const xs = doc.nodes.map((n) => n.x), ys = doc.nodes.map((n) => n.y);
-    doc.nodes.push({ id: freeId(new Set(doc.nodes.map((n) => n.id)), 'start'), type: 'scenario.started', v: 1,
+    // (Every page in a room adds the same one: freeId's plain.)
+    doc.nodes.push({ id: freeId(new Set(doc.nodes.map((n) => n.id)), 'start', true), type: 'scenario.started', v: 1,
                      x: (xs.length ? Math.min(...xs) : 0) - 336, y: ys.length ? Math.min(...ys) : 0, props: {} });
 }
 
@@ -1672,6 +1798,9 @@ function switchVariant(id) {
     if (view) { canvas.view = { ...view }; canvas.applyView(); }
     drawAll();
     builderSync();
+    // (Another variant's cards: the others' pointers and picks there, and they hear which one is open.)
+    roomDraw();
+    roomSay();
     status(`${variantLabel(ed.doc, id)}: its own cards and things. What is always present, and the start, are every variant's`);
 }
 
@@ -1697,6 +1826,7 @@ function changeVariants(fn, open) {
     setProblems(ed.problemsAll, true);
     ed.changed();
     drawVariants();
+    roomDraw();
 }
 
 function addVariant() {
@@ -3049,8 +3179,9 @@ function routePlaced(index, c) {
     const k = stepKey([], w);
     w.def.points = [{ k, at: { x: +c.x.toFixed(3), y: +c.y.toFixed(3), z: +c.z.toFixed(3), heading: +(c.heading || 0).toFixed(1) } }];
     ed.doc.world.push(w);
-    builderAdopted.add(id);   // (an Exit without a Save takes it out again, as every thing put down since)
+    builderAdopted.add(id);
     if (builderSent) builderSent.add(pointId(id, k));
+    ed.history.tagNext('builder');   // (an Exit without a Save takes it out again, as every thing put down since)
     ed.changed();
     const t = pointThings(false).find((x) => x.id === pointId(id, k));
     if (t) nuiCallback('directorBuilderConvert', { index, thing: t });
@@ -3068,6 +3199,7 @@ function pointRemoved(id) {
     }
     if (ed.taskOpen === id) ed.taskOpen = null;
     if (builderSent) builderSent.delete(id);
+    if (building) ed.history.tagNext('builder');
     ed.changed();
 }
 
@@ -3190,6 +3322,7 @@ function openBuilder(focusId, back) {
     builderSent = new Set(things.filter((t) => t.coords).map((t) => t.id));
     builderSynced = new Map();   // (a builder new open has been sent nothing by builderSync yet)
     builderAdopted = new Set();
+    ed.history.untag('builder');   // (its Exit takes back what this one does, not what an earlier one did)
     building = true;
     ed.inBuilder = true;
     gridFramed = false;
@@ -3197,6 +3330,8 @@ function openBuilder(focusId, back) {
     litSent = '';
     nuiCallback('directorBuild', { name: ed.doc.name || ed.key, things, focus: focusId || null, autosave: autosaveOn(),
                                    back: back === true });
+    roomSay();
+    drawWho();
 }
 
 // The world builder saves by itself every five minutes while there is something to save (html/js/furnisher.js),
@@ -3599,8 +3734,10 @@ function builderThing(w, all) {
     // them (client/furnish_builder.lua dress).
     const ext = (w.kind === 'vehicle' || w.kind === 'npc' || w.kind === 'prop') && w.def.ext && typeof w.def.ext === 'object'
         && Object.keys(w.def.ext).length ? w.def.ext : undefined;
+    // (Where it is too: another builder in the room moves it, or an undo does, and its copy here follows.)
     return { id: w.id, kind: w.kind, model: builderModel(w), label: w.label || w.id, uses,
-             prompt: promptOf(w), mark: markOf(w, uses), ext, ...builderExtras(w) };
+             prompt: promptOf(w), mark: markOf(w, uses), ext, coords: (w.def && w.def.coords) || null,
+             rot: (w.def && w.def.rot) || null, ...builderExtras(w) };
 }
 
 /** The scenario's things as the builder should show them now (client/director.lua): at most every 150 ms while
@@ -3626,7 +3763,8 @@ function builderSync() {
         const gone = [...builderSynced.keys()].some((id) => !now.has(id));
         builderSynced = now;
         if (!things.length && !gone) return;
-        nuiCallback('directorBuilderSync', { things, points, all: true });
+        // (`ids`: every thing and point it has: one another builder in the room removed goes from this builder too.)
+        nuiCallback('directorBuilderSync', { things, points, ids: [...now.keys()], all: true });
     }, 150);
 }
 
@@ -3646,13 +3784,35 @@ function builderSyncOne(id) {
 /** The builder closed without Done (its Exit throws away what was placed, and the Director closes; a test): what
  *  Configure made for things placed in it goes with them. Its panel and window let go, the grid home. */
 function builderLeft() {
-    if (building && builderAdopted.size && ed.doc) {
-        ed.doc.world = ed.doc.world.filter((w) => !builderAdopted.has(w.id));
-        if (builderAdopted.has(ed.worldOpen)) ed.worldOpen = null;
-        builderAdopted = new Set();
-        ed.history.commit(ed.doc);
+    // What it put down, moved and removed since its last Save (its steps, tagged 'builder'): taken back, in the room too,
+    // and nothing else (a Configure change stays, as one by another in the room does).
+    if (building && ed.doc) {
+        const back = ed.history.undoTagged(ed.doc, 'builder');
+        if (back) {
+            viewOf(back, openVariant());
+            if (ed.worldOpen && !findWorld(ed.doc, ed.worldOpen)) ed.worldOpen = null;
+            ed.changedNoCommit();
+        }
     }
+    builderAdopted = new Set();
     builderGone();
+}
+
+/** One of the scenario's things moved in the world builder, once it stops (client/director.lua thingMoved): where it is
+ *  now, as Done would write it, so the scenario has it at once (and the others in its room see it there). The world
+ *  builder's Exit takes it back. */
+function thingMoved(t) {
+    if (!building || !ed.doc || !t || typeof t.id !== 'string' || !t.coords || typeof t.coords.x !== 'number') return;
+    const w = findWorld(ed.doc, t.id);
+    if (!w || !thingIs(w.kind, 'builder')) return;
+    const before = JSON.stringify(w.def);
+    w.def.coords = builtCoords(t.coords);
+    const rx = w.kind === 'prop' && t.rot ? +t.rot.x || 0 : 0, ry = w.kind === 'prop' && t.rot ? +t.rot.y || 0 : 0;
+    if (rx || ry) w.def.rot = { x: rx, y: ry }; else delete w.def.rot;
+    if (typeof t.interior === 'boolean') w.def.interior = t.interior;
+    if (JSON.stringify(w.def) === before) return;
+    ed.history.tagNext('builder');
+    ed.changed();
 }
 
 /** The builder gone (Done, Exit, the Director back): its panel and window are let go, the grid comes home. */
@@ -3665,6 +3825,8 @@ function builderGone() {
     unpage();
     hoverCard = null;
     litSent = '';
+    roomSay();
+    drawWho();
 }
 
 /** The world builder's Play here: this thing's tasks and those it plays with (its tasks' playWith), read by the server
@@ -3884,6 +4046,7 @@ export const builder = {
         ed.doc.world.push(w);
         builderAdopted.add(id);
         if (builderSent) builderSent.add(id);
+        ed.history.tagNext('builder');   // (Exit takes it back out)
         ed.changed();
         return id;
     },
@@ -4507,6 +4670,24 @@ function build() {
             if (a && !a.disabled) onAct(a.dataset.act, a);
         });
     }
+    initRoom({
+        ed, canvas, where: roomWhere, variant: openVariant,
+        packed: () => packed(),
+        setCanon: roomCanon,
+        // (A card or a box held on the grid: what the others change waits for its drop.)
+        dragging: () => !!(canvas.drag && ['cards', 'note', 'resize'].includes(canvas.drag.kind)),
+        dragOf: () => (canvas.drag && canvas.drag.kind === 'cards' && canvas.drag.moved && canvas.drag.moving.length
+            ? 'card:' + canvas.drag.moving[0].id : ''),
+        thingOn: () => ((ed.tab === 'world' || building) && ed.worldOpen ? ed.worldOpen : null),
+        applied: roomApplied,
+        saved: roomWasSaved,
+        takeDoc: takeRoomDoc,
+        reapply: (ops) => {
+            roomCanon(applyOps(packed(), ops).doc);
+            ed.changedNoCommit();
+        },
+        watch: (known) => call('watch', { key: ed.key, rev: ed.baseRev || 0, join: true, roomId: known.id, seq: known.seq }),
+    });
     drawDock();
     initTutorial({
         ed, root: () => root, col: () => colEl, canvas: () => canvas, drawColumn,
@@ -4552,6 +4733,8 @@ function closeScreen() {
     closeSearch();
     closeAsk(null);
     hide();
+    // (What is not sent yet goes before the room hears this page has gone.)
+    roomFlushNow();
     nuiCallback('directorClose');
 }
 
@@ -4560,6 +4743,8 @@ function hide() {
     away = false;
     padHide();
     if (root) root.classList.remove('open', 'away');
+    roomSay();
+    roomIds(false);   // (the Systems Creator makes ids too: plain ones)
 }
 
 /** The page in sight (and the mouse's, as client/director.lua gave it). */
@@ -4571,6 +4756,47 @@ function showPage() {
         framePending = false;
         canvas.frame();
     }
+    roomSay();
+    drawWho();
+}
+
+// ---- THE ROOM (room.js): where this page is, for the others with the scenario open ----
+
+let roomTesting = false;   // a test's window is up (client/director.lua testWindow)
+
+function roomWhere() {
+    if (roomTesting) return 'test';
+    if (building) return 'builder';
+    return shown && !away && ed.page === 'editor' ? 'page' : 'away';
+}
+
+/** Ops were put on `c`, the document as kept (packed()'s: the open variant's own lists among it): the view of it again
+ *  (Variant 1's is the document itself). The variant open taken out by another: Variant 1. */
+function roomCanon(c) {
+    const was = openVariant();
+    ed.doc = unpackDoc(c, was, taskTypes());
+    if (openVariant() !== was) {
+        resetPicks();
+        drawVariants();
+        status(`${variantLabel(ed.doc, openVariant())}: the variant you had open was taken out by someone else`, 'warn');
+    }
+}
+
+/** What the others changed is on this page's copy: drawn again (the field in hand and a press under way waited for),
+ *  and what was picked or open that they took away let go of. */
+function roomApplied() {
+    for (const id of [...ed.selected]) if (!findNode(ed.doc, id)) ed.selected.delete(id);
+    if (ed.selectedLink && !ed.doc.links.some((l) => l.id === ed.selectedLink)) ed.selectedLink = null;
+    if (ed.selectedNote && !findComment(ed.doc, ed.selectedNote)) ed.selectedNote = null;
+    if (ed.worldOpen && !findWorld(ed.doc, ed.worldOpen) && !pointOf(ed.worldOpen)) ed.worldOpen = null;
+    if (!canvas.renaming) canvas.render();
+    drawVariants();
+    redrawWhenFree();
+    drawHead();
+    scheduleQuiet();
+    builderSync();
+    docTouched();
+    roomDraw();
 }
 
 /** The screen: IN THE WORLD on a scenario (`d.world`, /whip's Edit: `d.openKey`), the page kept out of sight while it
@@ -4582,6 +4808,7 @@ export async function open(d) {
     const world = !!(d && d.world === true);
     shown = true;
     away = world;
+    roomIds(true);
     root.classList.add('open');
     root.classList.toggle('away', world);
     if (!world) drawAll();
@@ -4604,8 +4831,12 @@ export async function open(d) {
     // Back on the scenario it had open: closing the screen made the server forget it, so it is told
     // again (who is editing it, and its live runs' pulses).
     if (ed.page === 'editor' && ed.key && !ed.demo && !(opening && ed.key === key)) {
-        call('watch', { key: ed.key, rev: ed.baseRev || 0 }).then((r) => {
+        // (In its room again, saying what this page has: the room's scenario comes back only if it moved on. An old
+        // revision open to restore is not the room's.)
+        const known = roomKnown();
+        call('watch', { key: ed.key, rev: ed.baseRev || 0, join: !!known, roomId: known ? known.id : 0, seq: known ? known.seq : 0 }).then(async (r) => {
             if (r.ok && Array.isArray(r.data.editors)) { ed.editors = r.data.editors; drawHead(); }
+            if (r.ok && r.data.room && typeof r.data.room === 'object' && ed.doc && !ed.demo) await roomBack(r.data);
             // A lore character's ped changed in /whip while the screen was closed: their NPCs wear the new one, as
             // nothing of the builder's (not a step to undo, not a change to save).
             if (r.ok && r.data.lore && typeof r.data.lore === 'object' && ed.doc && !ed.demo) {
@@ -4643,6 +4874,7 @@ export function message(d) {
             away = true;
             padHide();
             root.classList.add('away');
+            roomSay();
             break;
         case 'directorShow':
             builderLeft();
@@ -4798,13 +5030,25 @@ export function message(d) {
             if (id && Number.isInteger(d.index)) nuiCallback('directorBuilderId', { index: d.index, id });
             break;
         }
+        // (Out of the scenario at once, so the others in its room see it go; Exit brings it back.)
         case 'directorThingRemoved':
-            if (building && ed.doc && typeof d.id === 'string' && builderAdopted.delete(d.id)) {
+            if (building && ed.doc && typeof d.id === 'string' && findWorld(ed.doc, d.id)) {
+                builderAdopted.delete(d.id);
                 ed.doc.world = ed.doc.world.filter((w) => w.id !== d.id);
                 if (builderSent) builderSent.delete(d.id);
                 if (ed.worldOpen === d.id) ed.worldOpen = null;
+                ed.history.tagNext('builder');
                 ed.changed();
             }
+            break;
+        // One moved in the world builder, once it stops: where it is now, in the scenario at once.
+        case 'directorThingMoved':
+            thingMoved(d.thing);
+            break;
+        // The world builder's Exit: what it did since its last Save taken back (in the room too), then the Director closes.
+        case 'directorBuilderExit':
+            builderLeft();
+            closeScreen();
             break;
         // An emote clicked in the emote menu opened for a step (task-emote-pick): that step plays it.
         case 'directorEmotePicked': {
@@ -4835,6 +5079,7 @@ export function message(d) {
             const was = p.s.at;
             if (was && was.x === at.x && was.y === at.y && was.z === at.z && was.heading === at.heading) break;
             p.s.at = at;
+            if (building) ed.history.tagNext('builder');   // (the world builder's Exit takes it back)
             ed.changed();
             break;
         }
@@ -4853,6 +5098,19 @@ export function message(d) {
         case 'directorTestWindow':
         case 'directorTestFlow':
             testWindowMessage(d, ed, cardStyle());
+            if (d.action === 'directorTestWindow' && typeof d.on === 'boolean') {
+                roomTesting = d.on;
+                roomSay();
+            }
+            break;
+        // The others with this scenario open, what one of them said of themselves, and the scenario's changes (room.js).
+        case 'directorRoom':
+        case 'directorPeer':
+        case 'directorRoomOps':
+        case 'directorRoomAck':
+        case 'directorRoomReset':
+        case 'directorRoomSaved':
+            roomMessage(d);
             break;
         case 'directorTestDone': {
             if (!ed.doc) break;

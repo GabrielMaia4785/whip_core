@@ -691,14 +691,21 @@ function FurnishBuilder.convert(index, extra)
     return true
 end
 
---- One of the Director's points moved (a drag, a nudge, a turn): its page hears where it is now once it stops
---- (MOVED_MS after its last move), so what plays it (Play Tasks, a run) goes there without a Save first.
+--- One of the Director's things or points moved here (a drag, a nudge, a turn): its page hears where it is now once it
+--- stops (MOVED_MS after its last move), so what plays it (Play Tasks, a run) goes there without a Save first, and the
+--- others with the scenario open see it there (client/director_room.lua).
 local MOVED_MS = 250
-local movedAt = setmetatable({}, { __mode = 'k' })   -- [item] = when it last moved
+local FOLLOW_GUARD_MS = 1500   -- moved here this recently: another's word on where it is waits (follow)
+local movedAt = setmetatable({}, { __mode = 'k' })     -- [item] = when it last moved, while its word is waiting
+local movedHere = setmetatable({}, { __mode = 'k' })   -- [item] = when it last moved here
 function FurnishBuilder.moved(it)
     local x = type(it) == 'table' and it.extra or nil
     local session = ed and ed.session()
-    if not (session and session.page) or type(x) ~= 'table' or x.kind ~= 'point' or type(x.id) ~= 'string' then return end
+    if not (session and session.page) or type(x) ~= 'table' or type(x.id) ~= 'string' then return end
+    local point = x.kind == 'point'
+    -- (A thing's word is the Director's; a point's, any page's.)
+    if not point and not session.page.director then return end
+    movedHere[it] = GetGameTimer()
     local waiting = movedAt[it] ~= nil
     movedAt[it] = GetGameTimer()
     if waiting then return end
@@ -707,9 +714,52 @@ function FurnishBuilder.moved(it)
         movedAt[it] = nil
         local now = it.extra
         if type(now) ~= 'table' or now.id ~= x.id or not FurnishBuilder.open() then return end
-        SendNUIMessage({ action = 'directorPointMoved', id = x.id,
-                         coords = { x = it.x, y = it.y, z = it.z, heading = (it.rz or 0.0) % 360.0 } })
+        if point then
+            SendNUIMessage({ action = 'directorPointMoved', id = x.id,
+                             coords = { x = it.x, y = it.y, z = it.z, heading = (it.rz or 0.0) % 360.0 } })
+        else
+            DirectorScreen.thingMoved(it)
+        end
     end)
+end
+
+--- The Director's thing (or point) `id` is somewhere else now, by another's word: another builder in its room has
+--- moved it (`live`: is moving it), or the scenario says so (a change of theirs, an undo). Its copy goes there, unless
+--- it was moved here just now (this builder's own move wins until the scenario has it). `rx`, `ry`: a prop's tilt.
+function FurnishBuilder.follow(id, x, y, z, h, live, rx, ry)
+    local it = FurnishBuilder.itemOf(id)
+    if not it or not (x and y and z) then return end
+    local at = movedHere[it]
+    if at and GetGameTimer() - at < FOLLOW_GUARD_MS then return end
+    local same = math.abs(it.x - x) < 0.002 and math.abs(it.y - y) < 0.002 and math.abs(it.z - z) < 0.002
+        and math.abs(((it.rz or 0.0) - (h or 0.0) + 180.0) % 360.0 - 180.0) < 0.05
+        and (live or ((rx == nil or math.abs((it.rx or 0.0) - rx) < 0.05) and (ry == nil or math.abs((it.ry or 0.0) - ry) < 0.05)))
+    if same then return end
+    Furnisher.setPose(id, x, y, z, live and it.rx or rx, live and it.ry or ry, h)
+end
+
+--- One of the Director's things the builder has not got (another builder in its room put it down, or an undo brought
+--- it back): made where it is, the selection left alone. Answers whether it is here now.
+---@param row table  { model, x, y, z, rx, ry, rz, extra = { id, kind, ... } }
+function FurnishBuilder.addThing(row)
+    if not (ed and ed.session()) or type(row) ~= 'table' or type(row.extra) ~= 'table' then return false end
+    if FurnishBuilder.itemOf(row.extra.id) then return true end
+    return ed.addRow(row)
+end
+
+--- Is this thing being moved by another builder in the Director's room? Then it is theirs until they let go: said, and
+--- not moved here.
+local lockToldAt = 0
+function FurnishBuilder.lockedOut(it)
+    local x = type(it) == 'table' and it.extra or nil
+    local who = type(x) == 'table' and x.id ~= nil and DirectorRoom.heldBy(x.id) or nil
+    if not who then return false end
+    local now = GetGameTimer()
+    if now - lockToldAt > 2000 then
+        lockToldAt = now
+        UI.Notify(('%s is moving that: it is theirs until they let go'):format(who), 'info', 2000)
+    end
+    return true
 end
 
 --- A row removed (the furnisher's Remove): a route's point or a group's spot goes from its list at once, so the
@@ -833,6 +883,9 @@ function FurnishBuilder.frame()
             DirectorSpotMarks.draw(s, ed.isSelected(i) or FurnishBuilder.isLit(it), 0.9)
         end
     end
+
+    -- ---- the other builders with this scenario open: their cameras and names (client/director_room.lua) ----
+    DirectorRoom.frame()
 
     -- ---- the prompts a run will put up, as players will see them ----
     previewSync()

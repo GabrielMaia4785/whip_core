@@ -15,7 +15,7 @@ local EXAMPLES = { 'courier', 'steal_car', 'vault' }   -- server/director/exampl
 
 local uploads = {}   -- [src] = { [token] = { doc, why, at } }: a Save and a Check sent together each land
 local UPLOADS_HELD = 4   -- a player's documents waiting to be taken, at most (the oldest goes)
-local editing = {}   -- [key] = { [src] = name }
+-- (Who has which scenario open is its room's: server/director/room.lua.)
 
 -- ============================================
 -- A document from a page: plain data only
@@ -104,7 +104,7 @@ end
 
 local function editorsOf(key, except)
     local names = {}
-    for src, name in pairs(editing[key] or {}) do
+    for src, name in pairs(DirectorRoom.members(key)) do
         if src ~= except and Players[src] then names[#names + 1] = name end
     end
     table.sort(names)
@@ -294,15 +294,7 @@ end, 500, ADMIN)
 --- The card list moved (another resource added, changed or took away cards: cards_api.lua): every
 --- builder with a scenario open is told, and their page asks for it again.
 function Director.cardsCatalogueChanged(rev)
-    local told = {}
-    for _, list in pairs(editing) do
-        for src in pairs(list) do
-            if not told[src] then
-                told[src] = true
-                TriggerClientEvent('whip_core:client:directorCardsChanged', src, rev)
-            end
-        end
-    end
+    DirectorRoom.each(function(src) TriggerClientEvent('whip_core:client:directorCardsChanged', src, rev) end)
 end
 
 cb('open', { { 'key', 'key', 64 }, { 'rev', 'int', 0, 1000000000, 0 } }, function(source, player, key, rev)
@@ -310,15 +302,21 @@ cb('open', { { 'key', 'key', 64 }, { 'rev', 'int', 0, 1000000000, 0 } }, functio
     if why then return false, why end
     local row = DirectorStore.get(key)
     if not row then return false, 'No scenario called ' .. key end
-    local doc, r = DirectorStore.revision(key, rev > 0 and rev or row.draftRev)
-    if not doc then return false, r end
-    local _, problems = DirectorGraph.check(doc)
-    -- Only the draft is being edited: opening an old revision to look at it is not.
-    if r == row.draftRev then
-        for k, list in pairs(editing) do list[source] = nil; if next(list) == nil then editing[k] = nil end end
-        editing[key] = editing[key] or {}
-        editing[key][source] = player.fullName
+    local want = rev > 0 and rev or row.draftRev
+    local doc, r, room
+    if want == row.draftRev then
+        -- The draft is edited in its room (room.lua): as the room has it, with what others there have changed.
+        DirectorRoom.join(key, source, player.fullName)
+        local rwhy
+        doc, room, rwhy = DirectorRoom.document(key, source, row.draftRev, function() return DirectorStore.revision(key, row.draftRev) end)
+        if not room then return false, rwhy end
+        r = row.draftRev
+    else
+        -- An old revision, opened to look at or to restore: not the room's.
+        doc, r = DirectorStore.revision(key, want)
+        if not doc then return false, r end
     end
+    local _, problems = DirectorGraph.check(doc)
     local sc = Director.active[key]
     -- cardsRev: the page asks for the card list again when it has moved since it last did; providers:
     -- whose each other-resource card was when it was switched on (a card not here names who to start). lore: the
@@ -326,25 +324,65 @@ cb('open', { { 'key', 'key', 64 }, { 'rev', 'int', 0, 1000000000, 0 } }, functio
     return { scenario = row, doc = doc, rev = r, problems = problems, editors = editorsOf(key, source),
              on = sc ~= nil and sc.dbId == row.id, onRev = sc and sc.dbId == row.id and sc.rev or nil,
              uploadBps = UPLOAD_BPS, pack = DirectorStore.packOf(key), cardsRev = DirectorNodes.rev,
-             providers = DirectorStore.cardProviders(key), lore = DirectorLore.list() }
+             providers = DirectorStore.cardProviders(key), lore = DirectorLore.list(), room = room }
 end)
 
 --- The editor back on a scenario it already had open: closing the screen forgot it (`closed`), and
 --- the page comes back without opening it again. Seen as having it open once more, for who is
---- editing it and its live pulses.
-cb('watch', { { 'key', 'key', 64 }, { 'rev', 'int', 0, 1000000000, 0 } }, function(source, player, key, rev)
+--- editing it and its live pulses. `join`: it has the draft open (not an old revision), so it is in the
+--- room again; `roomId` and `seq` say what its page has, and the room's scenario comes back only when it
+--- has moved on since (others changed it, or it was saved elsewhere), with the draft's revision.
+cb('watch', { { 'key', 'key', 64 }, { 'rev', 'int', 0, 1000000000, 0 }, { 'join', 'bool', false },
+              { 'roomId', 'int', 0, 1000000000, 0 }, { 'seq', 'int', 0, 1000000000, 0 } },
+function(source, player, key, rev, join, roomId, seq)
     local why = off()
     if why then return false, why end
     local row = DirectorStore.get(key)
     if not row then return false, 'No scenario called ' .. key end
-    -- As `open`: only the draft is being edited.
-    if rev == row.draftRev then
-        for k, list in pairs(editing) do list[source] = nil; if next(list) == nil then editing[k] = nil end end
-        editing[key] = editing[key] or {}
-        editing[key][source] = player.fullName
+    local out = { editors = {}, lore = DirectorLore.list() }   -- (lore: as `open`'s)
+    if join then
+        DirectorRoom.join(key, source, player.fullName)
+        local doc, room, rwhy = DirectorRoom.document(key, source, row.draftRev,
+            function() return DirectorStore.revision(key, row.draftRev) end, { id = roomId, seq = seq })
+        if not room then return false, rwhy end
+        out.room, out.doc, out.baseRev = room, doc, row.draftRev
+        if doc then
+            local _, problems = DirectorGraph.check(doc)
+            out.problems = problems
+        end
     end
-    return { editors = editorsOf(key, source), lore = DirectorLore.list() }   -- (lore: as `open`'s)
+    out.editors = editorsOf(key, source)
+    return out
 end)
+
+--- Save the room's scenario (room.lua): the next revision of the draft, with everyone's changes in it, once the
+--- sender's own last changes (`upTo`, their page's batch) have arrived. Each change was held to its maker's card
+--- permissions as it came (room.lua), so the save is not held to the saver's.
+cb('roomSave', { { 'key', 'key', 64 }, { 'upTo', 'int', 0, 1000000000, 0 }, { 'note', 'string', 200, '' } },
+function(source, _, key, upTo, note)
+    local why = off()
+    if why then return false, why end
+    local pack = DirectorStore.packOf(key)
+    if pack then return false, ('A shipped scenario (from %s) is read-only here: Duplicate it to edit'):format(pack) end
+    local res, swhy = DirectorRoom.save(key, source, upTo, function(copy, baseRev)
+        local doc, lwhy = DirectorDoc.load(copy)
+        if not doc then return nil, 'That scenario could not be read: ' .. tostring(lwhy) end
+        return DirectorStore.save(key, baseRev, doc, source, note ~= '' and note or nil)
+    end, function(doc)
+        local _, problems = DirectorGraph.check(doc)
+        return problems
+    end)
+    if not res then return false, swhy end
+    return res
+end, 500)
+
+--- Throw away what the room holds that nobody saved (the sender alone in it, leaving it): the next to open it starts
+--- from the saved draft.
+cb('roomRevert', { { 'key', 'key', 64 } }, function(source, _, key)
+    local ok, why = DirectorRoom.revert(key, source)
+    if not ok then return false, why end
+    return { ok = true }
+end, 500)
 
 cb('history', { { 'key', 'key', 64 } }, function(_, _, key)
     if not DirectorStore.get(key) then return false, 'No scenario called ' .. key end
@@ -667,7 +705,7 @@ cb('delete', { { 'key', 'key', 64 } }, function(source, _, key)
     if not ok then return false, dwhy end
     -- Shipped: tombstoned, and never offered again (defaults §10).
     if shipped then DirectorPacks.forget(key, source) end
-    editing[key] = nil
+    DirectorRoom.close(key)
     Director.scriptSwitched[key] = nil
     return { ok = true }
 end, 1000, ADMIN)
@@ -1332,9 +1370,8 @@ local pulses = {}   -- [key] = { steps = { ... }, flushing }
 
 function Director.livePulse(run, e)
     local key = run.scenarioId
-    local watching = editing[key]
     -- (What a card said is the test window's, not a card lighting.)
-    if not watching or next(watching) == nil or type(e) ~= 'table' or e.kind == 'log' then return end
+    if not DirectorRoom.busy(key) or type(e) ~= 'table' or e.kind == 'log' then return end
     local p = pulses[key]
     if not p then p = { steps = {} }; pulses[key] = p end
     local steps = p.steps
@@ -1349,13 +1386,13 @@ function Director.livePulse(run, e)
         local list = p.steps
         p.steps = {}
         if #list == 0 then return end
-        for src in pairs(editing[key] or {}) do
+        for src in pairs(DirectorRoom.members(key)) do
             -- A builder whose access was taken away while the editor was open sees no more.
             if Players[src] and Permissions.has(src, BUILD) then
                 TriggerClientEvent('whip_core:client:directorPulse', src, key, list)
             end
         end
-        if not editing[key] then pulses[key] = nil end
+        if not DirectorRoom.busy(key) then pulses[key] = nil end
     end)
 end
 
@@ -1363,12 +1400,10 @@ end
 -- Who has what open
 -- ============================================
 
-local function closed(src)
+--- `gone`: they left the game.
+local function closed(src, gone)
     uploads[src] = nil
-    for k, list in pairs(editing) do
-        list[src] = nil
-        if next(list) == nil then editing[k] = nil end
-    end
+    DirectorRoom.leave(src, gone)
 end
 
 -- No permission needed: it only forgets what the sender had open (a builder whose access was taken
@@ -1380,7 +1415,7 @@ SecureEvent('whip_core:server:directorClosed', { whileDead = true, rateLimit = 2
 end)
 
 AddEventHandler('playerDropped', function()
-    closed(source)
+    closed(source, true)
     stopTestOf(source)
     unisolate(source, true)
 end)

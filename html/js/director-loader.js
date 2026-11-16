@@ -71,7 +71,12 @@ for (const action of ['directorClose', 'directorHide', 'directorShow', 'director
     // A freemode NPC's look made in the character editor (client/director.lua directorEditLook)
     'directorLookMade',
     // The test window: on and off with a test, its mouse, the run's steps (client/director.lua, director/testwin.js)
-    'directorTestWindow', 'directorTestFlow']) {
+    'directorTestWindow', 'directorTestFlow',
+    // The others with the same scenario open, what one of them says of themselves, and the scenario's changes as the
+    // room has them (client/director_room.lua)
+    'directorRoom', 'directorPeer', 'directorRoomOps', 'directorRoomAck', 'directorRoomReset', 'directorRoomSaved',
+    // One of the scenario's things moved in the world builder, once it stops (client/director.lua thingMoved); its Exit
+    'directorThingMoved', 'directorBuilderExit']) {
     NuiRouter.register(action, (d) => {
         if (app) app.message(d);
     });

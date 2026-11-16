@@ -196,6 +196,7 @@ server_scripts {
     'server/director/main.lua',
     'server/director/commands.lua',
     'server/director/npctests.lua',
+    'server/director/room.lua',
     'server/director/hub.lua',
     -- After main.lua: it adds to the Director table at load.
     'server/director/api.lua',
@@ -372,6 +373,7 @@ client_scripts {
     'client/runtime_points.lua',
     'client/conversations.lua',
     'client/director.lua',
+    'client/director_room.lua',
     'client/director_npcdebug.lua',
     'client/director_weapons.lua',
     'client/director_live.lua',
@@ -397,6 +399,8 @@ client_scripts {
     'client/pause.lua',         -- after controls.lua (ControlBlocks at file scope)
     'client/game_settings.lua', -- the pause menu's Settings page: GTA's settings menu under it
     'client/cam_shots.lua',
+    -- Before tools/camera.lua, which reads its sizes at file scope.
+    'client/cam_gizmo.lua',
     'client/camera.lua',
     'client/drive_cam.lua',     -- after camera.lua
     'client/charselect.lua',

@@ -108,7 +108,9 @@ local OPS = {
     list       = {},
     cards      = {},
     open       = { 'key', 'rev' },
-    watch      = { 'key', 'rev' },
+    watch      = { 'key', 'rev', 'join', 'roomId', 'seq' },
+    roomSave   = { 'key', 'upTo', 'note' },   -- the room's scenario saved (server/director/room.lua)
+    roomRevert = { 'key' },
     history    = { 'key' },
     create     = { 'key', 'name', 'from' },
     activate   = { 'key', 'rev', 'endRuns' },
@@ -771,8 +773,15 @@ RegisterNUICallback('directorBuild', function(d, cb)
         if PropSets and PropSets.showHidden then PropSets.showHidden() end
         local how = leaving
         leaving = nil
-        if how == 'page' then show()
-        elseif how == nil then close() end
+        if how == 'page' then
+            show()
+        elseif how == nil then
+            -- Its Exit: the page takes back what the builder did since its last Save (in the scenario's room too) and
+            -- closes the Director itself once that has gone to the room (html/js/director/app.js directorBuilderExit).
+            -- A page that does not answer is closed here anyway.
+            SendNUIMessage({ action = 'directorBuilderExit' })
+            SetTimeout(1500, function() if DirectorEditorOpen and hidden and not building then close() end end)
+        end
     end
     held = { took = took, was = was }
     local ok, why = Furnisher.open({
@@ -830,6 +839,22 @@ RegisterNUICallback('directorBuilderSync', function(d, cb)
                 local row = d.all == true and FurnishBuilder and FurnishBuilder.addPoint and rowOf(t)
                 if row then FurnishBuilder.addPoint(row) end
             end
+            -- Where the scenario has it (another builder in its room moved it, or an undo did): its copy goes there; one
+            -- the builder has not got (put down by another, or brought back) is made there. A door is the world's.
+            local c = t.coords
+            if type(c) == 'table' and tonumber(c.x) and tonumber(c.y) and tonumber(c.z) then
+                local r = type(t.rot) == 'table' and t.rot or {}
+                if FurnishBuilder.itemOf(t.id) then
+                    FurnishBuilder.follow(t.id, tonumber(c.x), tonumber(c.y), tonumber(c.z), tonumber(c.heading) or 0.0, false,
+                        tonumber(r.x), tonumber(r.y))
+                elseif d.all == true and t.kind ~= 'point' and t.kind ~= 'door' then
+                    local row = rowOf(t)
+                    if row and FurnishBuilder.addThing(row) and held then
+                        held.took[#held.took + 1] = t.id
+                        held.was[t.id] = { row.x, row.y, row.z }
+                    end
+                end
+            end
         end
     end
     -- `all`: a point the scenario no longer has goes too. `points` names every point it has now; without it, `things` is all.
@@ -843,6 +868,13 @@ RegisterNUICallback('directorBuilderSync', function(d, cb)
         elseif #d.things <= 500 then
             Furnisher.prunePoints(keep)
         end
+    end
+    -- `ids`: every thing and point the scenario has now (another builder in its room removed one, or an undo did: its
+    -- copy goes).
+    if d.all == true and type(d.ids) == 'table' and #d.ids <= 4000 and Furnisher.pruneThings then
+        local all = {}
+        for _, id in ipairs(d.ids) do if type(id) == 'string' then all[id] = true end end
+        Furnisher.pruneThings(all)
     end
 end)
 
@@ -1064,6 +1096,18 @@ function DirectorScreen.onClose(fn) closeHooks[#closeHooks + 1] = fn end
 
 --- The builder's Vehicles and Weapons lists (also used by client/director_live.lua).
 function DirectorScreen.lists() return vehicles(), weaponTiles() end
+
+--- One of the scenario's things moved in the world builder (once it stops: FurnishBuilder.moved): the page hears where
+--- it is now, as Done would hand it over, so the scenario has it at once (and the others in its room see it there).
+function DirectorScreen.thingMoved(it)
+    if not building or type(it) ~= 'table' or type(it.extra) ~= 'table' or type(it.extra.id) ~= 'string' then return end
+    local rows = builtRows({ { model = it.model, x = it.x, y = it.y, z = it.z, rx = it.rx, ry = it.ry, rz = it.rz, extra = it.extra } },
+        held and held.was or {})
+    local t = rows[1]
+    if not t then return end
+    if held then held.was[t.id] = { it.x, it.y, it.z } end
+    SendNUIMessage({ action = 'directorThingMoved', thing = t })
+end
 
 --- A take from the world builder that could not start: reopens the builder on the car.
 function DirectorScreen.reopen(car)

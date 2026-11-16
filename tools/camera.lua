@@ -850,20 +850,12 @@ end
 -- the playhead's camera is in white while flying. The path the camera takes is drawn as a line, sampled
 -- along the timeline. Only what can be seen is drawn, and less of it the further away.
 
-local GIZMO_DIST, GIZMO_MAX_H, GIZMO_ASPECT = 1.0, 0.6, 16 / 9
-local GIZMO_BODY = { front = 0.06, back = 0.42, hw = 0.13, hh = 0.1 }
+-- (The camera itself is client/cam_gizmo.lua's; this adds its number.)
+local GIZMO_ASPECT, GIZMO_BODY = CamGizmo.ASPECT, CamGizmo.BODY
 local GIZMO_ON, GIZMO_OFF, GIZMO_HEAD = { 74, 222, 128 }, { 96, 165, 250 }, { 255, 255, 255 }
 local PATH_RGB = { 96, 165, 250 }
-local GIZMO_NEAR, GIZMO_MID, GIZMO_FAR = 35.0, 120.0, 300.0
+local GIZMO_NEAR, GIZMO_FAR = CamGizmo.NEAR, CamGizmo.FAR
 local PATH_FAR, PATH_NEAR = 600.0, 30.0
-
-local function line(a, b, r, g, bl, al) DrawLine(a.x, a.y, a.z, b.x, b.y, b.z, r, g, bl, al) end
-local function quad(a, b, c, d, r, g, bl, al)
-    DrawPoly(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, r, g, bl, al)
-    DrawPoly(a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z, r, g, bl, al)
-    DrawPoly(c.x, c.y, c.z, b.x, b.y, b.z, a.x, a.y, a.z, r, g, bl, al)
-    DrawPoly(d.x, d.y, d.z, c.x, c.y, c.z, a.x, a.y, a.z, r, g, bl, al)
-end
 
 -- The numbers, on a DUI atlas (html/interact3d/camgizmo.html): one cell per camera.
 local GZ_PAGE, GZ_TXD, GZ_TEX = 'camgizmo', 'whip_camgizmo', 'cams'
@@ -911,63 +903,26 @@ local function seenAt(x, y, z, radius, far)
     return d
 end
 
+--- The camera (CamGizmo.geom) and where its number goes: the plate on its back, and the pill in a corner of its frame,
+--- read from both sides.
 local function gizmoGeom(p)
-    local pitch, yaw = math.rad(p.pitch), math.rad(p.yaw)
-    local cp, sp, cy, sy = math.cos(pitch), math.sin(pitch), math.cos(yaw), math.sin(yaw)
-    local pos = vector3(p.x, p.y, p.z)
-    local f = vector3(-sy * cp, cy * cp, sp)
-    local r = vector3(cy, sy, 0.0)
-    local u = vector3(sy * sp, -cy * sp, cp)
-    local t = math.tan(math.rad((p.fov or 50.0) * 0.5))
-    local d = math.min(GIZMO_DIST, GIZMO_MAX_H / math.max(t, 0.01))
-    local hh = d * t
-    local hw = hh * GIZMO_ASPECT
-    local c = pos + f * d
-    local nb = hw * 0.16
-    local top = c + u * hh
-    local bd = GIZMO_BODY
-    local fr, bk = pos - f * bd.front, pos - f * bd.back
-    local rw, uh = r * bd.hw, u * bd.hh
+    local g = CamGizmo.geom(p)
+    local f, r, u, hh, hw = g.f, g.r, g.u, g.hh, g.hw
     local lh = math.max(0.045, math.min(0.11, hh * 2.0 * 0.11))
     local lw = lh * GZ_LABEL_W / GZ_CELL_H
     local m = lh * 0.4
     local down = u * (hh - m - lh * 0.5)
     local side = r * (hw - m - lw * 0.5)
-    local pw = bd.hw * 2.0 * 0.94
-    local half = (d + bd.back) * 0.5
-    local mid = pos + f * ((d - bd.back) * 0.5)
-    return {
-        p = pos, f = f, r = r, u = u,
-        tl = c - r * hw + u * hh, tr = c + r * hw + u * hh, br = c + r * hw - u * hh, bl = c - r * hw - u * hh,
-        nl = top - r * nb, tip = top + u * (nb * 1.1), nr = top + r * nb,
-        f1 = fr - rw + uh, f2 = fr + rw + uh, f3 = fr + rw - uh, f4 = fr - rw - uh,
-        k1 = bk - rw + uh, k2 = bk + rw + uh, k3 = bk + rw - uh, k4 = bk - rw - uh,
-        plate = bk - f * GZ_LIFT, pw = pw, ph = pw * GZ_CELL_H / GZ_BACK_W,
-        pillBack = c - down - side - f * GZ_LIFT, pillFront = c - down + side + f * GZ_LIFT, lw = lw, lh = lh,
-        cx = mid.x, cy = mid.y, cz = mid.z, radius = math.sqrt(half * half + hw * hw + hh * hh) + 0.1,
-    }
+    local pw = GIZMO_BODY.hw * 2.0 * 0.94
+    g.plate, g.pw, g.ph = g.bk - f * GZ_LIFT, pw, pw * GZ_CELL_H / GZ_BACK_W
+    g.pillBack, g.pillFront = g.c - down - side - f * GZ_LIFT, g.c - down + side + f * GZ_LIFT
+    g.lw, g.lh = lw, lh
+    return g
 end
 
 local function drawGizmo(g, rgb, cell, dist)
-    local R, G, B = rgb[1], rgb[2], rgb[3]
-    local p = g.p
-    local tl, tr, br, bl = g.tl, g.tr, g.br, g.bl
-    line(tl, tr, R, G, B, 230); line(tr, br, R, G, B, 230); line(br, bl, R, G, B, 230); line(bl, tl, R, G, B, 230)
-    line(p, tl, R, G, B, 130); line(p, tr, R, G, B, 130); line(p, br, R, G, B, 130); line(p, bl, R, G, B, 130)
-    if dist > GIZMO_MID then return end
-    local f1, f2, f3, f4, k1, k2, k3, k4 = g.f1, g.f2, g.f3, g.f4, g.k1, g.k2, g.k3, g.k4
-    line(g.nl, g.tip, R, G, B, 230); line(g.tip, g.nr, R, G, B, 230)
-    line(f1, f2, R, G, B, 255); line(f2, f3, R, G, B, 255); line(f3, f4, R, G, B, 255); line(f4, f1, R, G, B, 255)
-    line(k1, k2, R, G, B, 255); line(k2, k3, R, G, B, 255); line(k3, k4, R, G, B, 255); line(k4, k1, R, G, B, 255)
-    line(f1, k1, R, G, B, 255); line(f2, k2, R, G, B, 255); line(f3, k3, R, G, B, 255); line(f4, k4, R, G, B, 255)
+    CamGizmo.draw(g, rgb, dist)
     if dist > GIZMO_NEAR then return end
-    quad(tl, tr, br, bl, R, G, B, 28)
-    quad(k1, k2, k3, k4, R, G, B, 150)
-    quad(f1, k1, k4, f4, R, G, B, 110)
-    quad(f2, k2, k3, f3, R, G, B, 110)
-    quad(f1, f2, k2, k1, R, G, B, 130)
-    quad(f4, f3, k3, k4, R, G, B, 90)
-    line(f1, p, R, G, B, 200); line(f2, p, R, G, B, 200); line(f3, p, R, G, B, 200); line(f4, p, R, G, B, 200)
     if not (cell and gzPage:exists() and cell >= 1 and cell <= GZ_CELLS) then return end
     local col, row = (cell - 1) % GZ_COLS, (cell - 1) // GZ_COLS
     local u0 = col * GZ_CELL_W / GZ_W

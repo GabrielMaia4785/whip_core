@@ -996,6 +996,9 @@ export class Canvas {
                 ed.pressedPicked();
             }
             if (!ed.selected.has(id)) return;
+            // (One another builder is dragging is theirs until they let go: app.js / room.js.)
+            const held = ed.heldBy && [...ed.selected].map((sid) => ed.heldBy(sid)).find(Boolean);
+            if (held) { ed.ui.status(`${held} is moving that card: it is theirs until they let go`, 'warn'); return; }
             const moving = [...ed.selected].map((sid) => findNode(ed.doc, sid)).filter(Boolean);
             this.drag = {
                 kind: 'cards', start, moved: false, moving,
@@ -1050,6 +1053,7 @@ export class Canvas {
                 this.placeCard(n);
             });
             this.moveWiresOf(d.movingIds || (d.movingIds = new Set(d.moving.map((n) => n.id))));
+            if (this.ed.live) this.ed.live();   // (an editor in a room: the others see it move)
         } else if (d.kind === 'wire') {
             d.to = this.toWorld(e.clientX, e.clientY);
             // (The wire being drawn moves alone; drawn in full the first time.)
@@ -1076,6 +1080,7 @@ export class Canvas {
             d.inner.forEach((o, i) => { o.x = d.fromNotes[i].x + mx; o.y = d.fromNotes[i].y + my; this.placeNote(o); });
             this.placeNote(c);
             this.moveWiresOf(d.movingIds || (d.movingIds = new Set(d.moving.map((n) => n.id))));
+            if (this.ed.live) this.ed.live();
         } else if (d.kind === 'resize') {
             if (!d.moved && Math.hypot(dx, dy) < DRAG_START_PX) return;
             d.moved = true;
