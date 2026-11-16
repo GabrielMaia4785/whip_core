@@ -29,7 +29,7 @@ rawset(Vehicles, 'getDef', function(id) return { plate = 'P' .. id } end)
 rawset(Vehicles, 'spotBlocked', function() return nil end)
 
 -- (The items the examples hand out and hold, as the server's own item list has them.)
-for _, item in ipairs({ 'package', 'cash', 'drill', 'gold_bar', 'lockpick', 'phone' }) do
+for _, item in ipairs({ 'camera', 'cash', 'drill', 'gold_bar', 'lockpick', 'phone' }) do
     Config.Items[item] = Config.Items[item] or { label = item }
 end
 

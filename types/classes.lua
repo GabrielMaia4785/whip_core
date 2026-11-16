@@ -609,7 +609,7 @@ function WhipPlayer:removeCash(amount, why, withNext) end
 ---@field slots number Number of slots
 ---@field label string Panel header label
 ---@field storageKey string Metadata key where nested inventory is stored (e.g. 'slots')
----@field allowedItems string[]|table<string, any>|nil Allowed items: a list of item keys { 'cash', 'id_card' } (a keyed table's keys also count; a per-item maxPerSlot is not enforced)
+---@field allowedItems string[]|table<string, any>|nil Allowed items: a list of item keys { 'wrench', 'screwdriver' } (a keyed table's keys also count; a per-item maxPerSlot is not enforced)
 
 
 -- ============================================

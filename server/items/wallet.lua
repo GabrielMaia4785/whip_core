@@ -1,6 +1,6 @@
 -- ============================================
 -- Item: wallet (Wallet)
--- 3 slots — accepts: cash, id_card
+-- 3 slots — accepts: cash
 -- ============================================
 
 -- Registered inline: the manifest loads this directory last. whip_core's function, not its export:
@@ -11,5 +11,5 @@ Panels.registerItem('wallet', {
     storageKey   = 'slots',
     -- The item keys it takes. (This said `cash = { maxPerSlot = 10000 }`, and nothing enforces a
     -- per-item cap — panels.lua says so — so it read as a limit that was not there.)
-    allowedItems = { 'cash', 'id_card' },
+    allowedItems = { 'cash' },
 }, GetCurrentResourceName())

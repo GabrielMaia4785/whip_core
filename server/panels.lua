@@ -385,7 +385,7 @@ function Panels.hooksFor(session)
 end
 
 --- An allowedItems list as a lookup set. Either spelling works — a list of item names
---- `{ 'cash', 'id_card' }` or a table keyed by name `{ cash = {...}, id_card = true }`. One normaliser
+--- `{ 'wrench', 'screwdriver' }` or a table keyed by name `{ wrench = {...}, screwdriver = true }`. One normaliser
 --- for both openers (OpenPanel and RegisterPanelItem).
 ---@param list table|nil
 ---@return table|nil
@@ -1048,7 +1048,7 @@ end
 --   slots        = number (default 3),
 --   label        = string | function(host) (default item name),
 --   storageKey   = string (default 'slots'),
---   allowedItems = { 'cash', 'id_card' } or { cash = {...}, id_card = true } (optional; only the
+--   allowedItems = { 'wrench', 'screwdriver' } or { wrench = {...}, screwdriver = true } (optional; only the
 --                  names count — a per-item maxPerSlot is not enforced, see the note below),
 --
 --   -- How the contents are kept in the item. Both absent = a plain slot array at

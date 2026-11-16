@@ -3,7 +3,7 @@
   "id": "courier",
   "rev": 1,
   "name": "Courier",
-  "description": "The smallest whole job: talk to the boss, fetch a package, bring it back, get paid. Ten minutes. Before testing it, place the Courier boss and the package in the World tab.",
+  "description": "The smallest whole job: talk to the boss, fetch a camera, bring it back, get paid. Ten minutes. Before testing it, place the Courier boss and the camera in the World tab.",
   "settings": {
     "start": { "mode": "interaction", "world": "giver", "label": "Talk" },
     "maxConcurrentRuns": 1,
@@ -15,8 +15,8 @@
     { "id": "giver", "kind": "npc", "layer": "standing", "label": "Courier boss",
       "def": { "model": "s_m_y_dealer_01", "coords": "spot", "behaviour": "stand",
                "conditions": { "invincible": true, "canMove": false } } },
-    { "id": "package", "kind": "groundItem", "layer": "run", "label": "The package",
-      "def": { "item": "package", "amount": 1, "coords": "spot" } }
+    { "id": "camera", "kind": "groundItem", "layer": "run", "label": "The camera",
+      "def": { "item": "camera", "amount": 1, "coords": "spot" } }
   ],
   "nodes": [
     { "id": "start", "type": "scenario.started", "v": 1, "x": -672, "y": 0, "props": {} },
@@ -25,31 +25,31 @@
         "opt1": "Yeah, you got something?", "opt2": "No." } },
     { "id": "d2", "type": "dialog.line", "v": 1, "x": 0, "y": 0, "props": {
         "npc": "giver", "speaker": "Courier boss",
-        "line": "There's a package waiting for pick-up. Bring it back here. You've got ten minutes.",
+        "line": "There's a camera waiting for pick-up. Bring it back here. You've got ten minutes.",
         "opt1": "On it.", "opt2": "Changed my mind." } },
     { "id": "team", "type": "dialog.team", "v": 1, "x": 336, "y": 0, "props": {
         "npc": "giver", "speaker": "Courier boss", "line": "Who are you doing this with?" } },
     { "id": "begin", "type": "scenario.begin", "v": 1, "x": 672, "y": 0, "props": {} },
     { "id": "go", "type": "flow.sequence", "v": 1, "x": 1008, "y": 0, "props": {} },
-    { "id": "place", "type": "item.place", "v": 1, "x": 1344, "y": -128, "props": { "item": "package" } },
-    { "id": "find", "type": "player.objective", "v": 1, "x": 1680, "y": -192, "props": { "text": "Find the package" } },
+    { "id": "place", "type": "item.place", "v": 1, "x": 1344, "y": -128, "props": { "item": "camera" } },
+    { "id": "find", "type": "player.objective", "v": 1, "x": 1680, "y": -192, "props": { "text": "Find the camera" } },
     { "id": "mark", "type": "map.blip", "v": 1, "x": 2016, "y": -192, "props": {
-        "at": "package", "label": "The package", "color": "yellow", "route": true } },
+        "at": "camera", "label": "The camera", "color": "yellow", "route": true } },
     { "id": "clock", "type": "flow.wait", "v": 1, "x": 1344, "y": 128, "props": { "seconds": 600 } },
     { "id": "late", "type": "scenario.fail", "v": 1, "x": 1680, "y": 128, "props": { "reason": "Too slow" } },
-    { "id": "noPlace", "type": "scenario.fail", "v": 1, "x": 1680, "y": -32, "props": { "reason": "The package could not be placed" } },
+    { "id": "noPlace", "type": "scenario.fail", "v": 1, "x": 1680, "y": -32, "props": { "reason": "The camera could not be placed" } },
     { "id": "no", "type": "scenario.calloff", "v": 1, "x": 1008, "y": 240, "props": { "reason": "Not interested" } },
-    { "id": "picked", "type": "item.picked", "v": 1, "x": 0, "y": 448, "props": { "item": "package" } },
-    { "id": "back", "type": "player.objective", "v": 1, "x": 336, "y": 448, "props": { "text": "Take the package back to the courier boss" } },
-    { "id": "unmark", "type": "map.blipRemove", "v": 1, "x": 672, "y": 448, "props": { "at": "package" } },
+    { "id": "picked", "type": "item.picked", "v": 1, "x": 0, "y": 448, "props": { "item": "camera" } },
+    { "id": "back", "type": "player.objective", "v": 1, "x": 336, "y": 448, "props": { "text": "Take the camera back to the courier boss" } },
+    { "id": "unmark", "type": "map.blipRemove", "v": 1, "x": 672, "y": 448, "props": { "at": "camera" } },
     { "id": "markBoss", "type": "map.blip", "v": 1, "x": 1008, "y": 448, "props": {
         "at": "giver", "label": "Courier boss", "color": "yellow", "route": true } },
     { "id": "d3", "type": "dialog.line", "v": 1, "x": 1344, "y": 448, "props": {
         "npc": "giver", "speaker": "Courier boss", "line": "Got it?",
         "opt1": "Here it is.", "opt2": "Not yet." } },
-    { "id": "take", "type": "item.take", "v": 1, "x": 1680, "y": 448, "props": { "item": "package" } },
+    { "id": "take", "type": "item.take", "v": 1, "x": 1680, "y": 448, "props": { "item": "camera" } },
     { "id": "missing", "type": "player.message", "v": 1, "x": 1680, "y": 720, "props": {
-        "text": "You don't have the package on you.", "kind": "warning", "who": "this player" } },
+        "text": "You don't have the camera on you.", "kind": "warning", "who": "this player" } },
     { "id": "pay", "type": "player.pay", "v": 1, "x": 2016, "y": 448, "props": { "amount": 250, "method": "auto", "reason": "Courier job" } },
     { "id": "payFail", "type": "player.message", "v": 1, "x": 2016, "y": 720, "props": {
         "text": "The payment didn't go through. Tell an admin.", "kind": "error", "who": "this player" } },
