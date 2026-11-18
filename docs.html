@@ -3473,7 +3473,7 @@ AddEventHandler('whip_core:player:logout', function() setWalk(0) end)   -- loggi
 <h3>Respawning and reviving</h3>
 <p>The death screen counts down <code>Config.RespawnTime</code> (10 seconds, also in <code>/whip</code> → Settings → Config), then shows <strong>Hold E to respawn</strong> (<kbd>A</kbd> on a controller). Holding it 1.5 seconds respawns them at a random hospital from <code>Config.RespawnLocations</code> (<code>vector4</code>s), with damage modifiers back to normal; the server refuses an earlier respawn.</p>
 <p><kbd>H</kbd> (<kbd>Y</kbd> on a controller) hides and shows the screen; respawning needs it showing. Themes recolour it with <code>--ui-death-curtain</code>.</p>
-<p>Admins revive with <code>/whip_revive &lt;charId&gt;</code> (console, or in game with <code>whip.devtools</code>), or themselves with <code>/whip_reviveme</code> (in game, <code>whip.devtools</code>). No item is needed. Every revive and respawn sets health to 200 and armour to 0 and starts the 10-second spawn guard, when low hunger and thirst cost no health.</p>
+<p>Admins revive with <code>/revive [id]</code>: a player's server id, or no id for themselves (in game with developer mode on; the console needs the id). <code>/heal</code> revives and fills health, armour, food and drink too (<a href="#admin-commands">Admin commands</a>). No item is needed. Every revive and respawn sets health to 200 and armour to 0 and starts the 10-second spawn guard, when low hunger and thirst cost no health.</p>
 
 <h3>Holding a respawn</h3>
 
@@ -11781,6 +11781,30 @@ end</code></pre>
 <tr><td><code>whipsupport</code> (console)</td><td>One block for a seller: version, setup report and recent errors by resource</td></tr>
 </table>
 
+<h3 id="admin-commands">Admin commands</h3>
+<p>In chat or F8 with developer mode on. Each does what its /w tool or panel button does. An id is the player's server id, the # on their Player Manager page. The ones marked console also work in the server console, where an id is needed.</p>
+<table class="event-table">
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>/noclip</code></td><td>Noclip on or off</td></tr>
+<tr><td><code>/god</code></td><td>God Mode on or off</td></tr>
+<tr><td><code>/invis</code></td><td>Invisible on or off</td></tr>
+<tr><td><code>/car &lt;model&gt;</code></td><td>A temporary car where you stand, with its key, and you in the driver's seat. Your next <code>/car</code> takes it away, and so does leaving the server</td></tr>
+<tr><td><code>/dv</code></td><td>The car you're in, or the nearest within 6 m, out of the world: an owned car goes to its garage, any other is removed</td></tr>
+<tr><td><code>/fix</code></td><td>Repairs the car you're in: engine, body, fuel tank and dirt</td></tr>
+<tr><td><code>/revive [id]</code> (console)</td><td>Stands a downed player up; no id, you</td></tr>
+<tr><td><code>/heal [id]</code> (console)</td><td>Health, armour, food and drink full, revived first if down; no id, you</td></tr>
+<tr><td><code>/kick &lt;id&gt; [reason]</code> (console)</td><td>Kicks them, with a note on their account. Only someone below you, as the Player Manager's Kick</td></tr>
+<tr><td><code>/freeze &lt;id&gt;</code> (console)</td><td>Freezes them in place; again lets them go</td></tr>
+<tr><td><code>/tp &lt;id&gt;</code></td><td>Takes you to them</td></tr>
+<tr><td><code>/bring &lt;id&gt;</code></td><td>Brings them to you</td></tr>
+<tr><td><code>/tpm</code></td><td>Takes you, and the car you drive, to your map waypoint</td></tr>
+<tr><td><code>/tpc &lt;x&gt; &lt;y&gt; &lt;z&gt;</code></td><td>Takes you to coordinates. A <code>vector4()</code> copied from Coords works too</td></tr>
+<tr><td><code>/back</code></td><td>Back to where you were before your last teleport</td></tr>
+<tr><td><code>/time &lt;hour&gt; [minute]</code> (console)</td><td>Sets the time for everyone</td></tr>
+<tr><td><code>/weather &lt;type&gt;</code> (console)</td><td>Sets the weather for everyone. A type it doesn't know lists the ones it does</td></tr>
+<tr><td><code>/announce &lt;text&gt;</code> (console)</td><td>Shows at the top of every player's screen for 10 seconds, with your name under it; 200 characters at most. Several in a row show one after another</td></tr>
+</table>
+
 <h3>/w: quick tools</h3>
 <p>Arrow keys move, <kbd>Enter</kbd> toggles, <kbd>Esc</kbd> closes. A tool stays on until switched off (its row lit) or acts once. Every debug tool draws into one shared pane.</p>
 <table class="event-table">
@@ -11789,7 +11813,7 @@ end</code></pre>
 <tr><td><strong>Noclip</strong></td><td>Fly, invisible and invincible: WASD, <kbd>Space</kbd>/<kbd>Ctrl</kbd>, <kbd>Shift</kbd> for speed. In a car, the car comes too and you stay in your seat, unless another player is driving it</td></tr>
 <tr><td><strong>Invisible</strong></td><td>Nobody sees you; you see yourself at half opacity</td></tr>
 <tr><td><strong>God Mode</strong></td><td>No damage; health kept full</td></tr>
-<tr><td><strong>Restore Player Cores</strong></td><td>Once: revives you if down (as <code>/whip_revive</code>), then fills your health, armour, food and drink</td></tr>
+<tr><td><strong>Restore Player Cores</strong></td><td>Once: revives you if down, then fills your health, armour, food and drink (<code>/heal</code>)</td></tr>
 <tr><td><strong>Reveal Players</strong></td><td>Every player as a named blip, and within 250 m a tag over their head: character name, charId and account name</td></tr>
 <tr><td><strong>Kill Me</strong></td><td>Once: an ordinary death where you are. Noclip and God Mode go off first</td></tr>
 <tr><td><strong>Repair Vehicle</strong></td><td>Once: repairs the car you're in, driving or not</td></tr>

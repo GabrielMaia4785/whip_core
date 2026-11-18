@@ -1005,6 +1005,115 @@ html[data-input="pad"].pad-hints-up .ui-drawtext-bottom .dt-cap {
 }
 
 /* ========================================
+   11. ANNOUNCEMENTS — the capsule at the top centre (ui.js §11)
+   ========================================
+
+   An admin's /announce, for every player, where nothing else sits. The HUD capsule's ground and a disc at a gauge's
+   size: the announce glyph on Signal Blue, inside a white ring that runs down the time it is up (--an-p, 1 to 0) with
+   no numbers. The words in display type, up to three lines (the command takes 200 characters), "Announcement" and
+   who sent it under them. One box scaled as a whole (a transform, never zoom), at the objective cards' size. On a
+   clean screen it hides with the rest of body's layers. */
+#ui-announce {
+    --an-k: calc(var(--ui-scale) * 1.25);
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: calc(100% / var(--an-k));
+    height: calc(100% / var(--an-k));
+    transform: scale(var(--an-k));
+    transform-origin: top left;
+    z-index: 945;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    box-sizing: border-box;
+    padding-top: 32px;
+    pointer-events: none;
+    font-family: var(--ui-font);
+}
+
+/* Two classes: status-hud.css loads after this file (as .ob-card). */
+.sh-capsule.an-card {
+    position: relative;
+    gap: 16px;
+    max-width: 1040px;
+    padding: 8px 34px 8px 8px;
+
+    /* entrance start: down from the top edge */
+    opacity: 0;
+    transform: translateY(-14px);
+    transition: opacity 0.35s var(--ui-ease), transform 0.35s var(--ui-ease);
+}
+
+.sh-capsule.an-card.visible {
+    opacity: 1;
+    transform: none;
+}
+
+.an-disc {
+    position: relative;
+    flex: 0 0 auto;
+    align-self: center;
+    width: var(--sh-ring-size);
+    height: var(--sh-ring-size);
+}
+
+/* The ring: a conic gradient masked to a band, so the white part can run down. */
+.an-disc::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: 50%;
+    background: conic-gradient(var(--ui-text) calc(var(--an-p, 1) * 360deg), var(--ui-border-hover) 0);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6.5px), #000 calc(100% - 6px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 6.5px), #000 calc(100% - 6px));
+}
+
+/* The core: Signal Blue with the glyph in ink, and the gauges' black outline. */
+.an-core {
+    position: absolute;
+    inset: 9px;
+    border-radius: 50%;
+    background: var(--ui-accent);
+    box-shadow: var(--sh-disc-outline);
+    color: var(--ui-surface-solid);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.an-core svg {
+    width: 30px;
+    height: 30px;
+}
+
+.an-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    padding: 6px 0;
+}
+
+.an-text {
+    font-family: var(--ui-font-display);
+    font-size: var(--ui-fs-display);
+    font-weight: var(--ui-fw-bold);
+    line-height: 1.22;
+    letter-spacing: -0.01em;
+    color: var(--ui-text);
+    text-shadow: var(--ui-shadow-text);
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.an-row {
+    font-size: var(--ui-fs-lg);
+    font-weight: var(--ui-fw-semibold);
+    color: var(--ui-text-label);
+}
+
+/* ========================================
    PAD HINT STRIP — the menu's buttons, on a controller (controller.js)
    ========================================
 

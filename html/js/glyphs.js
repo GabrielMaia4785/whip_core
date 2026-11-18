@@ -564,6 +564,13 @@
         camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"'
             + ' stroke-linecap="round" stroke-linejoin="round">'
             + '<rect x="2.8" y="6.8" width="12.6" height="10.4" rx="2.2"/><path d="M15.4 10.6l5.8-3.2v9.2l-5.8-3.2Z"/></svg>',
+
+        // ANNOUNCE: an announcement's bubble (ui.js §11), a loudspeaker and two waves. Not an action, so not in the
+        // loading screen's copy (nor the logo's light, logo-light.js).
+        announce: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"'
+            + ' stroke-linecap="round" stroke-linejoin="round">'
+            + '<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>'
+            + '<path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
     };
 
     // WHICH GLYPHS FILL THE WHOLE DISC rather than sitting in the middle of it. See the badge's

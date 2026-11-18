@@ -480,78 +480,317 @@ devCommand('whip_groundcount', function(source)
 end)
 
 -- ============================================
--- Death / Revive Commands
+-- Players, teleports, cars and the world
 -- ============================================
+--
+-- The /w tools and the panels' buttons, typed. Each goes through the function its button uses (server/devtools.lua,
+-- server/object_viewer.lua, server/time.lua), so a rule changed there holds here too. An id is the player's server
+-- id, the # on their Player Manager page. In the console, the ones that act on a player need an id; the ones that act
+-- on you (/car, /dv, /fix, /tp, /bring) are for in game. Noclip, God Mode, Invisible and the teleports of your own
+-- (/tpm, /tpc, /back) are your game's (client/dev_commands.lua).
 
--- /whip_revive <charId> — Revive a character by charId
-devCommand('whip_revive', function(source, args)
-    local charId = tonumber(args[1])
-    if not charId then
-        local msg = 'Usage: /whip_revive <charId>'
-        if source == 0 then
-            print('[whip_core] ' .. msg)
-        else
-            ShowError(source, msg)
-        end
+--- The player an id names: someone on the server, by server id. No id: the one typing, where `self` allows it (never
+--- the console). Answers the id, or nil once it has said why.
+---@param source number
+---@param arg string|nil
+---@param usage string
+---@param self boolean|nil
+---@return number|nil
+local function targetOf(source, arg, usage, self)
+    if arg == nil then
+        if self and source ~= 0 then return source end
+        reply(source, usage, 'error')
+        return nil
+    end
+    local id = Sanitize.id(arg)
+    if not id or not GetPlayerName(id) then
+        reply(source, ('Nobody on the server has the id %s'):format(arg), 'error')
+        return nil
+    end
+    return id
+end
+
+--- Typed in game? The console is told the command is for in game.
+---@param source number
+---@param name string
+---@return boolean
+local function inGame(source, name)
+    if source ~= 0 then return true end
+    reply(source, ('/%s is for in game'):format(name), 'error')
+    return false
+end
+
+--- Who ran it, for the console's line.
+---@param source number
+---@return string
+local function whoRan(source)
+    if source == 0 then return 'the console' end
+    local p = Players[source]
+    return p and p.fullName or GetPlayerName(source) or ('player ' .. source)
+end
+
+-- /revive [id]: a downed player stood up; no id, you.
+devCommand('revive', function(source, args)
+    local target = targetOf(source, args[1], 'Usage: revive <id>', true)
+    if not target then return end
+    local player = Players[target]
+    if not player then
+        reply(source, 'They have no character loaded', 'error')
         return
     end
-
-    local target, targetSrc = GetPlayerByCharId(charId)
-    if not target then
-        local msg = ('No active player with charId %d'):format(charId)
-        if source == 0 then
-            print('[whip_core] ' .. msg)
-        else
-            ShowError(source, msg)
-        end
+    if not player.isDead then
+        reply(source, target == source and 'You are not down' or (player.fullName .. ' is not down'), 'error')
         return
     end
-    ---@cast targetSrc -nil
-
-    if not target.isDead then
-        local msg = ('%s is not dead'):format(target.fullName)
-        if source == 0 then
-            print('[whip_core] ' .. msg)
-        else
-            ShowError(source, msg)
-        end
-        return
-    end
-
-    MarkPlayerAlive(targetSrc, target, 'revive:admin')
-    TriggerClientEvent('whip_core:client:revive', targetSrc)
-
-    local msg = ('Revived %s (charId: %d)'):format(target.fullName, charId)
-    if source == 0 then
-        print('[whip_core] ' .. msg)
-    else
-        ShowSuccess(source, msg)
-    end
-    print(('[whip_core] %s revived by source %d'):format(target.fullName, source))
+    MarkPlayerAlive(target, player, target == source and 'revive:self' or 'revive:admin')
+    TriggerClientEvent('whip_core:client:revive', target)
+    reply(source, target == source and 'You are back up' or ('Revived ' .. player.fullName), 'success')
+    print(('[whip_core] %s [%d] revived by %s'):format(player.fullName, target, whoRan(source)))
 end)
 
--- /whip_reviveme — Revive yourself
-devCommand('whip_reviveme', function(source)
-    if source == 0 then
-        print('[whip_core] This command must be run in-game')
+-- /heal [id]: health, armour, food and drink full, as the /w Restore Player Cores; down, revived first. No id, you.
+devCommand('heal', function(source, args)
+    local target = targetOf(source, args[1], 'Usage: heal <id>', true)
+    if not target then return end
+    local player = Players[target]
+    local wasDown = player ~= nil and player.isDead
+    local ok, why = DevTools.restore(target)
+    if not ok then
+        reply(source, why, 'error')
         return
     end
+    ---@cast player -nil
+    local done = wasDown and 'Revived, with health, armour, food and drink restored' or 'Health, armour, food and drink restored'
+    reply(source, target == source and done or ('%s: %s'):format(player.fullName, done:lower()), 'success')
+    if wasDown then print(('[whip_core] %s [%d] revived by %s (/heal)'):format(player.fullName, target, whoRan(source))) end
+end)
 
-    local player = Players[source]
+-- /kick <id> [reason]: off the server, with a note on their account, as the panel's Kick: only someone below you.
+devCommand('kick', function(source, args)
+    local target = targetOf(source, args[1], 'Usage: kick <id> [reason]')
+    if not target then return end
+    local reason = Sanitize.string(table.concat(args, ' ', 2), 200)
+    if reason == '' then reason = 'Kicked by admin' end
+    local name = (Players[target] or {}).fullName or GetPlayerName(target)
+    -- The note on their account is a database write.
+    CreateThread(function()
+        local ok, why = DevTools.kick(source, target, reason)
+        reply(source, ok and ('Kicked ' .. tostring(name)) or why, ok and 'success' or 'error')
+    end)
+end)
+
+-- /freeze <id>: frozen in place, or free again (the object viewer's Freeze on a player).
+devCommand('freeze', function(source, args)
+    local target = targetOf(source, args[1], 'Usage: freeze <id>')
+    if not target then return end
+    local player = Players[target]
     if not player then
-        ShowError(source, 'No character loaded')
+        reply(source, 'They have no character loaded', 'error')
         return
     end
+    local on = ObjectViewer.togglePlayerHold(target, 'frozen')
+    reply(source, (on and 'Froze %s' or 'Unfroze %s'):format(player.fullName), 'success')
+    print(('[whip_core] %s [%d] %s by %s'):format(player.fullName, target, on and 'frozen' or 'unfrozen', whoRan(source)))
+end)
 
-    if not player.isDead then
-        ShowError(source, 'You are not dead')
+-- /tp <id>: you, to them (the panel's Teleport).
+devCommand('tp', function(source, args)
+    if not inGame(source, 'tp') then return end
+    local target = targetOf(source, args[1], 'Usage: tp <id>')
+    if not target then return end
+    if target == source then
+        reply(source, 'That id is yours', 'error')
         return
     end
+    local ok, why = DevTools.teleportTo(source, target)
+    if not ok then reply(source, why, 'error') end
+end)
 
-    MarkPlayerAlive(source, player, 'revive:self')
-    TriggerClientEvent('whip_core:client:revive', source)
-    ShowSuccess(source, 'You have been revived')
-    print(('[whip_core] %s [%d] self-revived via /whip_reviveme'):format(player.fullName, source))
+-- /bring <id>: them, to you (the panel's Bring).
+devCommand('bring', function(source, args)
+    if not inGame(source, 'bring') then return end
+    local target = targetOf(source, args[1], 'Usage: bring <id>')
+    if not target then return end
+    if target == source then
+        reply(source, 'That id is yours', 'error')
+        return
+    end
+    local ok, why = DevTools.bring(source, target)
+    if not ok then reply(source, why, 'error') end
+end)
+
+-- /fix: the car you are in, repaired (the /w Repair Vehicle).
+devCommand('fix', function(source)
+    if not inGame(source, 'fix') then return end
+    local ok, why = DevTools.repairVehicleOf(source)
+    reply(source, ok and 'Vehicle repaired' or why, ok and 'success' or 'error')
+end)
+
+--- How near a car must be for /dv when you are not in one, in metres.
+local DV_REACH = 6.0
+
+--- The car someone sits in, or else the nearest within DV_REACH in their routing bucket; nil for none.
+---@param source number
+---@return number|nil
+local function carOf(source)
+    local ped = GetPlayerPed(source)
+    if not ped or ped == 0 then return nil end
+    local veh = GetVehiclePedIsIn(ped, false)
+    if veh and veh ~= 0 then return veh end
+    local at, bucket = GetEntityCoords(ped), GetPlayerRoutingBucket(source)
+    local best, bestDist = nil, DV_REACH
+    for _, v in ipairs(GetAllVehicles() --[[@as integer[] ]]) do
+        if DoesEntityExist(v) and GetEntityRoutingBucket(v) == bucket then
+            local d = #(GetEntityCoords(v) - at)
+            if d <= bestDist then best, bestDist = v, d end
+        end
+    end
+    return best
+end
+
+-- /dv: the car you are in, or the nearest within 6 m, out of the world (the object viewer's Remove): someone's own car
+-- into its garage, a street or temporary one removed.
+devCommand('dv', function(source)
+    if not inGame(source, 'dv') then return end
+    local veh = carOf(source)
+    if not veh then
+        reply(source, ('No car within %d m'):format(math.floor(DV_REACH)), 'error')
+        return
+    end
+    local vehicleId = Vehicles.getEntityVehicleId(veh)
+    local def = vehicleId and Vehicles.getDef(vehicleId)
+    local owned = def and not def.session
+    -- Putting an owned car away saves it.
+    CreateThread(function()
+        local ok, why = ObjectViewer.removeCar(source, veh)
+        reply(source, ok and (owned and 'Sent back to its garage' or 'Vehicle removed') or why, ok and 'success' or 'error')
+    end)
+end)
+
+--- Each admin's /car: [source] = vehicleId. A new /car takes the last one away, and so does leaving.
+local adminCars = {}
+
+--- Take an admin's /car away, if it is still there. Taking its key back waits.
+---@param source number
+local function dropAdminCar(source)
+    local vehicleId = adminCars[source]
+    adminCars[source] = nil
+    if vehicleId and Vehicles.getDef(vehicleId) then Vehicles.cleanupSessionVehicle(vehicleId, 'despawned') end
+end
+
+-- /car <model>: a temporary car where you stand, with its key, and you in the driver's seat.
+devCommand('car', function(source, args)
+    if not inGame(source, 'car') then return end
+    local model = args[1] and args[1]:lower()
+    if not model or model == '' then
+        reply(source, 'Usage: car <model>', 'error')
+        return
+    end
+    if not Players[source] then
+        reply(source, 'You have no character loaded', 'error')
+        return
+    end
+    -- Taking the last one away and giving the new key both wait.
+    CreateThread(function()
+        dropAdminCar(source)
+        local ped = GetPlayerPed(source)
+        if not ped or ped == 0 or not Players[source] then return end
+        -- (The last /car, just taken away, may still read as the one they sit in: it no longer exists.)
+        local sitting = GetVehiclePedIsIn(ped, false)
+        if sitting ~= 0 and DoesEntityExist(sitting) then
+            reply(source, 'Get out of the car you are in first', 'error')
+            return
+        end
+        local at = GetEntityCoords(ped)
+        local vehicleId, err = Vehicles.spawnTempFor(model, { x = at.x, y = at.y, z = at.z, heading = GetEntityHeading(ped) }, {
+            forSource     = source,
+            keyInIgnition = true,
+            locked        = false,
+            idleDespawn   = false,   -- it goes with the next /car or when they leave, not when they walk off
+            bucket        = GetPlayerRoutingBucket(source),
+        }, GetCurrentResourceName())
+        if not vehicleId then
+            reply(source, ('No %s: %s'):format(model, tostring(err)), 'error')
+            return
+        end
+        -- Asked again after the waits: they may have left, or typed /car again meanwhile.
+        if not GetPlayerName(source) or adminCars[source] then
+            Vehicles.cleanupSessionVehicle(vehicleId, 'despawned')
+            return
+        end
+        adminCars[source] = vehicleId
+        local entity = Vehicles.getEntity(vehicleId)
+        if entity then SetPedIntoVehicle(GetPlayerPed(source), entity, -1) end
+    end)
+end)
+
+AddEventHandler('playerDropped', function()
+    local src = source
+    if adminCars[src] then CreateThread(function() dropAdminCar(src) end) end
+end)
+
+-- /time <hour> [minute]: the server's clock, for everyone (the Time & Weather page's Set Time).
+devCommand('time', function(source, args)
+    local hour, minute = tonumber(args[1]), tonumber(args[2] or 0)
+    if not hour or not minute or hour % 1 ~= 0 or minute % 1 ~= 0 or hour < 0 or hour > 23 or minute < 0 or minute > 59 then
+        reply(source, 'Usage: time <hour 0-23> [minute 0-59]', 'error')
+        return
+    end
+    if CoreReady ~= true then
+        reply(source, NOT_READY, 'error')
+        return
+    end
+    local ok, why = TimeWeather.setTime(hour, minute)
+    if not ok then
+        reply(source, why, 'error')
+        return
+    end
+    DevTools.refresh('tw')
+    reply(source, ('Time set to %02d:%02d'):format(hour, minute), 'success')
+end)
+
+-- /weather <type>: the server's weather, for everyone (the Time & Weather page's Set Weather).
+devCommand('weather', function(source, args)
+    local weather = args[1] and args[1]:upper()
+    if not weather or not TimeWeather.isValidWeather(weather) then
+        reply(source, 'Usage: weather <type>, one of ' .. table.concat(TimeWeather.getWeatherTypes(), ', '), 'error')
+        return
+    end
+    if CoreReady ~= true then
+        reply(source, NOT_READY, 'error')
+        return
+    end
+    local ok, why = TimeWeather.setWeather(weather)
+    if not ok then
+        reply(source, why, 'error')
+        return
+    end
+    DevTools.refresh('tw')
+    reply(source, 'Weather set to ' .. weather, 'success')
+end)
+
+--- How long an announcement stays up (ms), and how many characters it may have.
+local ANNOUNCE_MS, ANNOUNCE_MAX = 10000, 200
+
+-- /announce <text>: to every player, in the announcement capsule at the top of the screen (html/js/ui.js §11), with
+-- who sent it.
+devCommand('announce', function(source, _, raw)
+    -- The words as typed (quotes and all), after the command's name.
+    local text = Sanitize.string(tostring(raw or ''):match('^%S+%s+(.-)%s*$') or '', ANNOUNCE_MAX * 2)
+    if text == '' then
+        reply(source, 'Usage: announce <text>', 'error')
+        return
+    end
+    if (utf8.len(text) or #text) > ANNOUNCE_MAX then
+        reply(source, ('An announcement is %d characters at most'):format(ANNOUNCE_MAX), 'error')
+        return
+    end
+    TriggerClientEvent('whip_core:client:announce', -1, {
+        text = text,
+        from = source ~= 0 and GetPlayerName(source) or nil,
+        ms   = ANNOUNCE_MS,
+    })
+    print(('[whip_core] Announcement by %s: %s'):format(whoRan(source), text))
 end)
 
 -- /whip_statebag [id] — Print all statebag values for a player

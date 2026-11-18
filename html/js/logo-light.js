@@ -22,9 +22,9 @@ const ICON_SHARE = 0.46 / 0.78;
 const shared = window.WhipGlyphs || { glyphs: {}, fullBleed: {} };
 
 /** The marks that are not actions: a menu arrow (`back`), an objective card's (a tick or a cross lit
- *  over a load would read as a verdict on it), the notifications', and the dev tools' own. */
+ *  over a load would read as a verdict on it), the notifications', an announcement's, and the dev tools' own. */
 const NOT_LIT = new Set(['back', 'objective', 'target', 'pin', 'star', 'timer',
-    'fail', 'success', 'info', 'warning', 'object', 'ped', 'camera']);
+    'fail', 'success', 'info', 'warning', 'object', 'ped', 'camera', 'announce']);
 const names = Object.keys(shared.glyphs).filter((n) => !NOT_LIT.has(n));
 
 /** The logo's markup — the landing page's trace of the whip logo — with clip ids under `prefix`, so two

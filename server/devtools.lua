@@ -565,27 +565,25 @@ local function accountRank(account)
     return rank
 end
 
--- Kick player
---
--- 'id', not 'int': the int type CLAMPS, and an id is an address (a clamped id kicks whoever holds
--- that slot). 'id' rejects instead. Same on pmTeleportTo and pmBringPlayer below.
-SecureEvent('whip_core:server:pmKick', {
-    rateLimit = 2000,
-    ace = 'whip.devtools',
-    params = { {'targetSource', 'id'}, {'reason', 'string', 200, 'Kicked by admin'} },
-}, function(source, player, targetSource, reason)
+--- Kick a connected player, with a note on their account: the panel's Kick, and /kick (server/commands.lua). Only
+--- someone below the one kicking (Who may act on whom, above); the console is above everyone. The note is a database
+--- write, so this waits.
+---@param source number  the admin, or 0 for the console
+---@param targetSource number
+---@param reason string
+---@return boolean ok
+---@return string|nil why
+function DevTools.kick(source, targetSource, reason)
     -- Anyone connected: in the world, or at the character screen (PendingPlayers), as Ban does (audit 20, SEC-5).
-    if not GetPlayerName(targetSource) then
-        NotifyPlayer(source, 'They are not on the server', 'error')
-        return
-    end
-    -- Only someone below the kicking admin (Who may act on whom, above).
+    if not GetPlayerName(targetSource) then return false, 'They are not on the server' end
     local theirs = rankOfSource(targetSource)
-    if not outranks(rankOfSource(source), theirs) then
+    if source ~= 0 and not outranks(rankOfSource(source), theirs) then
         return false, theirs == 'permanent' and 'They are an admin in server.cfg: they cannot be kicked from the panel'
             or theirs == 'temporary' and 'Only an admin from server.cfg can kick someone who has dev tools'
             or 'You cannot kick yourself'
     end
+    local admin = Players[source]
+    local by = admin and admin.fullName or (source == 0 and 'The console' or GetPlayerName(source))
     local loaded = Players[targetSource]
     local userId = (loaded or PendingPlayers[targetSource] or {}).userId
     local name = loaded and loaded.fullName or GetPlayerName(targetSource)
@@ -595,15 +593,29 @@ SecureEvent('whip_core:server:pmKick', {
     if userId then
         noted, noteId = pcall(MySQL.insert.await,
             'INSERT INTO `admin_notes` (`userId`, `note`, `createdBy`, `createdByName`) VALUES (?, ?, ?, ?)',
-            { userId, 'KICKED: ' .. reason, player.charId, player.fullName }
+            { userId, 'KICKED: ' .. reason, admin and admin.charId or nil, by }
         )
     end
     if not noted or not noteId then
         print(('[whip_core:admin] the kick note for userId %s did not save: %s'):format(tostring(userId), tostring(noteId)))
-        NotifyPlayer(source, 'Kicked, but the note about it did not save', 'error')
+        if source ~= 0 then NotifyPlayer(source, 'Kicked, but the note about it did not save', 'error') end
     end
-    DropPlayer(targetSource, 'Kicked: ' .. reason)
-    print(('[whip_core:admin] %s kicked %s: %s'):format(player.fullName, tostring(name), reason))
+    -- Asked again after the write: they may have left while it waited.
+    if GetPlayerName(targetSource) then DropPlayer(targetSource, 'Kicked: ' .. reason) end
+    print(('[whip_core:admin] %s kicked %s: %s'):format(tostring(by), tostring(name), reason))
+    return true
+end
+
+-- Kick player
+--
+-- 'id', not 'int': the int type CLAMPS, and an id is an address (a clamped id kicks whoever holds
+-- that slot). 'id' rejects instead. Same on pmTeleportTo and pmBringPlayer below.
+SecureEvent('whip_core:server:pmKick', {
+    rateLimit = 2000,
+    ace = 'whip.devtools',
+    params = { {'targetSource', 'id'}, {'reason', 'string', 200, 'Kicked by admin'} },
+}, function(source, _, targetSource, reason)
+    return DevTools.kick(source, targetSource, reason)
 end)
 
 --- Everyone a ban on this account would turn away, and the highest dev-tools rank among them ('permanent',
@@ -862,19 +874,36 @@ SecureEvent('whip_core:server:pmSetStat', {
     pushUserDetail(source, target.userId)
 end)
 
+--- Take an admin to a player: the panel's Teleport, and /tp (server/commands.lua).
+---@return boolean ok
+---@return string|nil why
+function DevTools.teleportTo(source, targetSource)
+    local tgtPed = GetPlayerPed(targetSource)
+    if not Players[targetSource] or not tgtPed or tgtPed == 0 then return false, 'They are not in the world' end
+    local coords = GetEntityCoords(tgtPed)
+    TriggerClientEvent('whip_core:client:pmTeleport', source, coords.x, coords.y, coords.z)
+    return true
+end
+
+--- Bring a player to an admin: the panel's Bring, and /bring (server/commands.lua).
+---@return boolean ok
+---@return string|nil why
+function DevTools.bring(source, targetSource)
+    local srcPed = GetPlayerPed(source)
+    if not srcPed or srcPed == 0 then return false, 'You are not in the world' end
+    if not Players[targetSource] then return false, 'They are not in the world' end
+    local coords = GetEntityCoords(srcPed)
+    TriggerClientEvent('whip_core:client:pmTeleport', targetSource, coords.x, coords.y, coords.z)
+    return true
+end
+
 -- Teleport admin to player
 SecureEvent('whip_core:server:pmTeleportTo', {
     rateLimit = 1000,
     ace = 'whip.devtools',
     params = { {'targetSource', 'id'} },  -- reject-don't-clamp: see pmKick
 }, function(source, _, targetSource)
-    local tgtPed = GetPlayerPed(targetSource)
-    if not Players[targetSource] or not tgtPed or tgtPed == 0 then
-        NotifyPlayer(source, 'They are not in the world', 'error')
-        return
-    end
-    local coords = GetEntityCoords(tgtPed)
-    TriggerClientEvent('whip_core:client:pmTeleport', source, coords.x, coords.y, coords.z)
+    return DevTools.teleportTo(source, targetSource)
 end)
 
 -- Bring player to admin
@@ -883,14 +912,7 @@ SecureEvent('whip_core:server:pmBringPlayer', {
     ace = 'whip.devtools',
     params = { {'targetSource', 'id'} },  -- reject-don't-clamp: see pmKick
 }, function(source, _, targetSource)
-    local srcPed = GetPlayerPed(source)
-    if not srcPed or srcPed == 0 then return end
-    if not Players[targetSource] then
-        NotifyPlayer(source, 'They are not in the world', 'error')
-        return
-    end
-    local coords = GetEntityCoords(srcPed)
-    TriggerClientEvent('whip_core:client:pmTeleport', targetSource, coords.x, coords.y, coords.z)
+    return DevTools.bring(source, targetSource)
 end)
 
 -- A PICTURE OF THEIR GAME, for their page (html/js/wp/playerManager.js keeps it a few minutes): what they see, whip's
@@ -959,39 +981,53 @@ SecureEvent('whip_core:server:devKillMe', {
     TriggerClientEvent('whip_core:client:devKillMe', source)
 end)
 
--- /w Restore Player Cores (tools/player.lua): health, armour, food and drink. Stats.set clamps to each stat's own max, so
--- an over-large value is "full" without knowing the numbers (hunger and thirst are registered even when switched
--- off in the config, so setting them is always safe).
---
--- Dead, it revives you first, the way /whip_revive does: MarkPlayerAlive (the server's record, full
--- health, the revived hooks) and the client's revive, which stands the ped up and ends the death
--- screen before it returns. The full stats set after it land on the living ped.
+--- A player's health, armour, food and drink filled: /w Restore Player Cores (tools/player.lua) and /heal
+--- (server/commands.lua). Stats.set clamps to each stat's own max, so an over-large value is "full" without knowing
+--- the numbers (hunger and thirst are registered even when switched off in the config, so setting them is always
+--- safe).
+---
+--- Down, they are revived first, the way /revive does: MarkPlayerAlive (the server's record, full health, the revived
+--- hooks) and the client's revive, which stands the ped up and ends the death screen before it returns. The full
+--- stats set after it land on the living ped.
+---@param target number
+---@return boolean ok
+---@return string|nil why
+function DevTools.restore(target)
+    local player = Players[target]
+    if not player then return false, 'They have no character loaded' end
+    if player.isDead then
+        MarkPlayerAlive(target, player, 'revive:admin')
+        TriggerClientEvent('whip_core:client:revive', target)
+    end
+    for _, name in ipairs({ 'health', 'armour', 'hunger', 'thirst' }) do
+        Stats.set(target, name, 1e9, 'devtools:restore')
+    end
+    return true
+end
+
+-- /w Restore Player Cores: DevTools.restore on yourself.
 -- (Accepted while dead: an `ace` event is an admin tool, not the character acting.)
 SecureEvent('whip_core:server:devRestore', {
     rateLimit = 1000,
     ace = 'whip.devtools',
 }, function(source, player)
-    local revived = false
-    if player and player.isDead then
-        MarkPlayerAlive(source, player, 'revive:admin')
-        TriggerClientEvent('whip_core:client:revive', source)
-        revived = true
+    if not player then return false, 'No character loaded' end
+    local revived = player.isDead
+    local ok, why = DevTools.restore(source)
+    if not ok then return false, why end
+    if revived then
         print(('[whip_core] %s revived themselves (/w Restore Player Cores)'):format(tostring(player.fullName)))
-    end
-    for _, name in ipairs({ 'health', 'armour', 'hunger', 'thirst' }) do
-        Stats.set(source, name, 1e9, 'devtools:restore')
     end
     ShowSuccess(source, revived and 'Revived, with health, armour, food and drink restored'
         or 'Health, armour, food and drink restored')
 end)
 
--- /w Repair Vehicle (tools/player.lua): the car the admin is in, DRIVING IT OR NOT.
--- Repair natives need network control, and a car another player drives belongs to that player's game,
--- so the server finds the car and asks the game that owns it to do the repair.
-SecureEvent('whip_core:server:devRepairVehicle', {
-    rateLimit = 1000,
-    ace = 'whip.devtools',
-}, function(source)
+--- Repair the car an admin is in, DRIVING IT OR NOT: /w Repair Vehicle (tools/player.lua) and /fix
+--- (server/commands.lua). Repair natives need network control, and a car another player drives belongs to that
+--- player's game, so the server finds the car and asks the game that owns it to do the repair.
+---@return boolean ok
+---@return string|nil why
+function DevTools.repairVehicleOf(source)
     local ped = GetPlayerPed(source)
     local veh = (ped and ped ~= 0) and GetVehiclePedIsIn(ped, false) or 0
     if not veh or veh == 0 or not DoesEntityExist(veh) then return false, 'You are not in a vehicle' end
@@ -1001,6 +1037,15 @@ SecureEvent('whip_core:server:devRepairVehicle', {
     local vehicleId = Vehicles.getEntityVehicleId(veh)
     if vehicleId then VehicleDamage.clear(vehicleId) end
     TriggerClientEvent('whip_core:client:devRepairVehicle', owner, NetworkGetNetworkIdFromEntity(veh))
+    return true
+end
+
+SecureEvent('whip_core:server:devRepairVehicle', {
+    rateLimit = 1000,
+    ace = 'whip.devtools',
+}, function(source)
+    local ok, why = DevTools.repairVehicleOf(source)
+    if not ok then return false, why end
     ShowSuccess(source, 'Vehicle repaired')
 end)
 
@@ -3283,6 +3328,8 @@ local function twBroadcast()
         TriggerClientEvent('whip_core:client:twRefresh', src, payload)
     end)
 end
+-- /time and /weather (server/commands.lua) ask with DevTools.refresh('tw').
+DevTools.setRefresh('tw', twBroadcast)
 
 --- Set Time (admin)
 SecureEvent('whip_core:server:twSetTime', {

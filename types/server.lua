@@ -748,7 +748,7 @@ function whip_core:TrackInvocationLock(releaseFn, eventName, src) end
 function whip_core:RecordEventRejection(eventName, src, reason) end
 
 --- The ACE one of whip_core's commands needs beyond FiveM's own, or nil. Its in-game admin
---- commands (/whip_giveitem, /whip_revive, ...) answer 'whip.devtools'. For a chat resource's
+--- commands (/whip_giveitem, /revive, ...) answer 'whip.devtools'. For a chat resource's
 --- command suggestions (whip_chat asks it).
 ---@param name string Command name, without the slash
 ---@return string|nil ace

@@ -76,10 +76,16 @@ end
 
 RegisterNetEvent('whip_core:client:notify', showToast)
 
--- Player Manager: teleport to coords
-RegisterNetEvent('whip_core:client:pmTeleport', function(x, y, z)
-    local ped = PlayerPedId()
-    SetEntityCoordsNoOffset(ped, x, y, z + 1.0, false, false, false)
+-- An admin's announcement (/announce, server/commands.lua): the capsule at the top centre (html/js/ui.js §11), which
+-- shows them one at a time.
+RegisterNetEvent('whip_core:client:announce', function(a)
+    if type(a) ~= 'table' or type(a.text) ~= 'string' or a.text == '' then return end
+    SendNUIMessage({
+        action = 'uiAnnounce',
+        text   = a.text,
+        from   = type(a.from) == 'string' and a.from or nil,
+        ms     = tonumber(a.ms),
+    })
 end)
 
 --- A teleport behind a fade: fade, move, wait for the ground, fade back. Waits are bounded, so the screen always returns.

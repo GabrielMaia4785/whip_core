@@ -1580,6 +1580,69 @@ import { openPadKeyboard } from './pad-keyboard.js';   // whip's keyboard (and, 
     }
 
     // ========================================
+    // 11. ANNOUNCEMENTS — the capsule at the top centre
+    // ========================================
+    //
+    // AN ADMIN'S WORD TO EVERY PLAYER (/announce, server/commands.lua), in a capsule of its own at the top centre
+    // (css/ui.css §11). The bubble's ring runs down the time it is up, with no numbers; the words wrap; the row under
+    // them says it is an announcement and who sent it. One at a time: one arriving while another is up waits its
+    // turn, and a few at most wait.
+
+    const ANNOUNCE_MS = 10000;
+    const ANNOUNCE_WAITING = 5;
+
+    const announceEl = document.createElement('div');
+    announceEl.id = 'ui-announce';
+    // Fixed markup: the words and the sender go in with textContent (anShow).
+    announceEl.innerHTML = '<div class="sh-capsule an-card"><div class="an-disc"><div class="an-core"></div></div>'
+        + '<div class="an-body"><div class="an-text"></div><div class="an-row"></div></div></div>';
+    document.body.appendChild(announceEl);
+
+    const _anCard = announceEl.querySelector('.an-card');
+    const _anCore = announceEl.querySelector('.an-core');
+    const _anText = announceEl.querySelector('.an-text');
+    const _anRow = announceEl.querySelector('.an-row');
+    const _anWaiting = [];
+    let _anUp = false;
+    let _anFrame = 0;
+
+    /** The next waiting announcement up, its ring running down over its time; none left, the capsule stays down. */
+    function anShow() {
+        const a = _anWaiting.shift();
+        if (!a) { _anUp = false; return; }
+        _anUp = true;
+        // The glyph table's own markup, never the sender's string.
+        if (!_anCore.firstChild) _anCore.innerHTML = ((window.WhipGlyphs && window.WhipGlyphs.glyphs) || {}).announce || '';
+        _anText.textContent = a.text;
+        _anRow.textContent = a.from ? 'Announcement · ' + a.from : 'Announcement';
+        announceEl.style.setProperty('--an-p', '1');
+        _anCard.classList.add('visible');
+        const start = performance.now();
+        cancelAnimationFrame(_anFrame);
+        const step = (now) => {
+            const left = Math.max(0, 1 - (now - start) / a.ms);
+            announceEl.style.setProperty('--an-p', left.toFixed(4));
+            if (left > 0) { _anFrame = requestAnimationFrame(step); return; }
+            _anCard.classList.remove('visible');
+            setTimeout(anShow, 400);   // its way out (css/ui.css §11), then the next
+        };
+        _anFrame = requestAnimationFrame(step);
+    }
+
+    /** Lua: an announcement ({ text, from?, ms? }), up for `ms` (10 seconds) once those before it have gone. */
+    function uiAnnounce(d) {
+        const text = d && typeof d.text === 'string' ? d.text.trim() : '';
+        if (!text) return;
+        if (_anWaiting.length >= ANNOUNCE_WAITING) _anWaiting.shift();
+        _anWaiting.push({
+            text: text,
+            from: d && typeof d.from === 'string' ? d.from : '',
+            ms: d && typeof d.ms === 'number' && d.ms > 0 ? Math.min(d.ms, 30000) : ANNOUNCE_MS,
+        });
+        if (!_anUp) anShow();
+    }
+
+    // ========================================
     // 5. RADIAL MENU
     // ========================================
     //
@@ -2622,6 +2685,7 @@ import { openPadKeyboard } from './pad-keyboard.js';   // whip's keyboard (and, 
     window.uiRadialPage     = uiRadialPage;
     window.uiRadialPageUpdate = uiRadialPageUpdate;
     window.uiObjective      = uiObjective;
+    window.uiAnnounce       = uiAnnounce;
     window.uiCancel         = uiCancel;
 
 })();
@@ -2667,6 +2731,7 @@ NuiRouter.register('uiRadialHide', () => uiRadialHide());
 NuiRouter.register('uiRadialPage', (d) => uiRadialPage(d));             // a second page (Seats)
 NuiRouter.register('uiRadialPageUpdate', (d) => uiRadialPageUpdate(d));
 NuiRouter.register('uiObjective', (d) => uiObjective(d));                 // a job's objective card (§10)
+NuiRouter.register('uiAnnounce', (d) => uiAnnounce(d));                   // an admin's announcement (§11)
 // A clean screen (client/clean_screen.lua): every layer of the page hidden for a recording, but what the
 // one holding it shows itself (the Camera Creator's, css/ui.css). Hidden, not shut: they keep working.
 NuiRouter.register('cleanScreen', (d) => document.documentElement.classList.toggle('whip-clean', !!(d && d.on)));

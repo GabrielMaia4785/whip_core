@@ -362,6 +362,19 @@ local function sendPlayerHolds(sid)
     TriggerClientEvent('whip_core:client:ovHold', sid, { frozen = h.frozen == true, noCombat = h.noCombat == true })
 end
 
+--- Flip one of a player's holds ('frozen' or 'noCombat') and tell their game; answers whether it is on now. The
+--- viewer's player options, and /freeze (server/commands.lua).
+---@param sid number
+---@param name string
+---@return boolean on
+local function togglePlayerHold(sid, name)
+    local h = pholds[sid] or {}
+    h[name] = not h[name]
+    pholds[sid] = (h.frozen or h.noCombat) and h or nil
+    sendPlayerHolds(sid)
+    return h[name] == true
+end
+
 --- Out of the seats, everyone in it (players and NPCs), straight onto the road.
 local function ejectAll(veh)
     local n = 0
@@ -397,13 +410,15 @@ end
 
 --- What the /whip Vehicles page (server/vehicle_manager.lua) does to a car in the world the way this file does, rather
 --- than again: a one-off (on the server, or the owning game), the repair, everyone out, and the frozen hold (which
---- follows the car to whoever owns it next).
+--- follows the car to whoever owns it next). And for the admin commands (server/commands.lua): a player's holds, and
+--- a car's removal (removeCar, below).
 ObjectViewer = {
     carEffect = carEffect,
     fixCar = fixCar,
     ejectAll = ejectAll,
     toggleFrozen = function(entity) return toggleHold(entity, FROZEN) end,
     isFrozen = function(entity) return ((holds[entity] or 0) & FROZEN) ~= 0 end,
+    togglePlayerHold = togglePlayerHold,
 }
 
 --- A car out of the world (Vehicles.removeFromWorld: whip's one way, its record let go of and a street car deleted).
@@ -533,14 +548,22 @@ local function removeLive(source, entity)
     return true
 end
 
-ACTIONS['veh.remove'] = { kind = 'street', fn = function(source, entity)
+--- A car out of the world, the viewer's Remove: a Dungeon Master's car its own way, any other by takeAway (someone's
+--- own car into its garage). The viewer, and /dv (server/commands.lua).
+---@return boolean ok
+---@return string|nil why
+local function removeCar(source, entity)
     local live, lwhy = removeLive(source, entity)
-    if live ~= nil then
-        if not live then return false, lwhy end
-        return true, 'Removed', { gone = true }
-    end
+    if live ~= nil then return live, lwhy end
     local ok, err = takeAway(entity)
     if not ok then return false, err or 'It could not be removed' end
+    return true
+end
+ObjectViewer.removeCar = removeCar
+
+ACTIONS['veh.remove'] = { kind = 'street', fn = function(source, entity)
+    local ok, why = removeCar(source, entity)
+    if not ok then return false, why end
     return true, 'Removed', { gone = true }
 end }
 
@@ -642,11 +665,7 @@ end }
 
 for _, name in ipairs({ 'frozen', 'noCombat' }) do
     ACTIONS['ply.' .. name] = { kind = 'player', fn = function(_, _, sid)
-        local h = pholds[sid] or {}
-        h[name] = not h[name]
-        pholds[sid] = (h.frozen or h.noCombat) and h or nil
-        sendPlayerHolds(sid)
-        return true, nil, { on = h[name] == true }
+        return true, nil, { on = togglePlayerHold(sid, name) }
     end }
 end
 
